@@ -64,6 +64,32 @@ function DisconnectIcon() {
   );
 }
 
+function SplitLineIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      {/* Line segment */}
+      <line x1="2" y1="14" x2="15" y2="3" />
+      {/* Scissors / break mark at midpoint */}
+      <line x1="6.5" y1="7" x2="9" y2="10" stroke="currentColor" strokeWidth="1.2" />
+      <line x1="9" y1="7" x2="6.5" y2="10" stroke="currentColor" strokeWidth="1.2" />
+      {/* Gap dots at break */}
+      <circle cx="7.75" cy="8.5" r="1" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function JoinLinesIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+      {/* Two segments converging to one */}
+      <line x1="2" y1="13" x2="8" y2="8.5" />
+      <line x1="2" y1="4" x2="8" y2="8.5" />
+      <line x1="8" y1="8.5" x2="15" y2="8.5" />
+      <polyline points="12,6.5 15,8.5 12,10.5" />
+    </svg>
+  );
+}
+
 /** Hatched polygon — represents the Area Fill tool. */
 function AreaFillIcon() {
   return (
@@ -205,6 +231,7 @@ export default function ToolPanel() {
   const ungroupSelection    = useProgramStore((s) => s.ungroupSelection);
 
   const activeTool             = useUIStore((s) => s.activeTool);
+  // split-line and join-lines are canvas-driven; toolbar just activates them
   const setActiveTool          = useUIStore((s) => s.setActiveTool);
   const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
   const setAreaFillEditGroupId = useUIStore((s) => s.setAreaFillEditGroupId);
@@ -265,10 +292,13 @@ export default function ToolPanel() {
   const canDisconnect = canEdit && hasConnectedPair;
   const canGroup      = canEdit && selectedCommandIds.size > 0;
   const canUngroup    = canEdit && hasSelectedGroup;
+  // split-line and join-lines are always available when a pattern is open;
+  // the canvas handles the "nothing to click" case gracefully
+  const canSplitJoin  = canEdit;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill') => {
+  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines') => {
     if (activeTool === tool) {
       setActiveTool(null);
       if (tool === 'area-fill') clearAreaFill();
@@ -338,6 +368,20 @@ export default function ToolPanel() {
         label="Disconnect joined lines"
         disabled={!canDisconnect}
         onClick={disconnectLines}
+      />
+      <ToolButton
+        icon={<SplitLineIcon />}
+        label="Split line — click along a line"
+        active={activeTool === 'split-line'}
+        disabled={!canSplitJoin}
+        onClick={() => toggleTool('split-line')}
+      />
+      <ToolButton
+        icon={<JoinLinesIcon />}
+        label="Join lines — click a junction"
+        active={activeTool === 'join-lines'}
+        disabled={!canSplitJoin}
+        onClick={() => toggleTool('join-lines')}
       />
 
       <Divider />

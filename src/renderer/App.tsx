@@ -9,6 +9,7 @@ import Canvas from './components/visualization/Canvas';
 import PatternCommandList from './components/PatternCommandList';
 import ToolPanel from './components/ToolPanel';
 import HistoryPanel from './components/HistoryPanel';
+import ContextMenu, { useCommandContextMenu } from './components/ContextMenu';
 
 // ── Text annotation ───────────────────────────────────────────────────────────
 
@@ -219,6 +220,7 @@ function CommandPane() {
     selectedCommandIds, lastSelectedId,
     selectOne, selectToggle, selectRange, clearSelection,
   } = useProgramStore();
+  const { showMenu } = useCommandContextMenu();
 
   if (!program) {
     return (
@@ -247,6 +249,15 @@ function CommandPane() {
         else selectOne(id);
       }}
       onClear={clearSelection}
+      onContextMenu={(e, cmdId) => {
+        e.preventDefault();
+        // Select the row first if not already in selection
+        if (cmdId) {
+          const { selectedCommandIds: ids } = useProgramStore.getState();
+          if (!ids.has(cmdId)) selectOne(cmdId);
+        }
+        showMenu(e.clientX, e.clientY, pattern.commands);
+      }}
     />
   );
 }
@@ -314,6 +325,10 @@ export default function App() {
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      // Skip shortcuts when typing in an input / textarea
+      const target = e.target as HTMLElement;
+      const inInput = target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable;
+
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         save();
@@ -331,6 +346,26 @@ export default function App() {
         e.preventDefault();
         useProgramStore.getState().redo();
         return;
+      }
+      if (!inInput) {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'c') {
+          useProgramStore.getState().copySelection();
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'x') {
+          e.preventDefault();
+          useProgramStore.getState().cutSelection();
+          return;
+        }
+        if ((e.ctrlKey || e.metaKey) && e.key === 'v') {
+          e.preventDefault();
+          useProgramStore.getState().pasteAboveSelection();
+          return;
+        }
+        if (e.key === 'Delete' || e.key === 'Backspace') {
+          useProgramStore.getState().deleteSelection();
+          return;
+        }
       }
     };
     window.addEventListener('keydown', handler);
@@ -357,6 +392,7 @@ export default function App() {
     <div className="flex flex-col h-screen bg-gray-900 text-gray-100 overflow-hidden">
       <Toolbar />
       <SaveErrorToast />
+      <ContextMenu />
 
       <div ref={containerRef} className="flex flex-1 overflow-hidden">
         {/* Left: canvas */}

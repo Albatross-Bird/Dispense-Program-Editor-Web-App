@@ -8,13 +8,14 @@ import type { AffineTransform } from '@lib/affine';
 import { computeAffine } from '@lib/affine';
 import type { Camera } from './camera';
 import { fitCamera, screenToWorld, worldToScreen, zoomAt } from './camera';
-import { collectPoints, drawCommand, extractMarkFiducials, hitTest, valveColor } from './renderers';
+import { collectPoints, computeConnectedStarts, drawCommand, extractMarkFiducials, hitTest, valveColor } from './renderers';
 import {
   computeHandles, drawHandles, hitTestHandle,
   deepCloneCommands, clearRawForModified, findCmdById,
 } from './handles';
 import type { Handle } from './handles';
 import CalibrationOverlay from './Calibration';
+import { useCommandContextMenu } from '../ContextMenu';
 
 // ── Canvas rendering ──────────────────────────────────────────────────────────
 
@@ -272,6 +273,91 @@ function hitTestPolyEdge(
 }
 
 /**
+ * Hit-test all Line/LineFix commands (including inside groups) for split.
+ * Returns the nearest projection point within threshold screen-px, or null.
+ */
+function hitTestLineForSplit(
+  sx: number, sy: number,
+  commands: PatternCommand[],
+  cam: Camera,
+  threshold = 8,
+): { cmdId: string; splitPoint: [number, number, number]; sx: number; sy: number } | null {
+  let best: { cmdId: string; splitPoint: [number, number, number]; sx: number; sy: number } | null = null;
+  let bestDist = threshold;
+
+  function visit(cmds: PatternCommand[]) {
+    for (const cmd of cmds) {
+      if ((cmd.kind === 'Line') && cmd.id) {
+        const [asx, asy] = worldToScreen(cmd.startPoint[0], cmd.startPoint[1], cam);
+        const [bsx, bsy] = worldToScreen(cmd.endPoint[0], cmd.endPoint[1], cam);
+        const res = nearestPointOnEdge([sx, sy], [asx, asy], [bsx, bsy]);
+        if (res.distance < bestDist) {
+          bestDist = res.distance;
+          const wx = (res.point[0] - cam.panX) / cam.zoom;
+          const wy = (res.point[1] - cam.panY) / cam.zoom;
+          // Interpolate Z along world segment
+          const segLen = Math.hypot(
+            cmd.endPoint[0] - cmd.startPoint[0],
+            cmd.endPoint[1] - cmd.startPoint[1],
+          );
+          const t = segLen > 1e-9
+            ? Math.hypot(wx - cmd.startPoint[0], wy - cmd.startPoint[1]) / segLen
+            : 0;
+          const wz = cmd.startPoint[2] + t * (cmd.endPoint[2] - cmd.startPoint[2]);
+          best = { cmdId: cmd.id, splitPoint: [wx, wy, wz], sx: res.point[0], sy: res.point[1] };
+        }
+      } else if (cmd.kind === 'Group') {
+        visit(cmd.commands);
+      }
+    }
+  }
+  visit(commands);
+  return best;
+}
+
+/**
+ * Sort selected line commands into a connected chain. Returns IDs in order,
+ * or just the input IDs if no clear chain can be built.
+ */
+function orderLineChain(lines: import('@lib/types').LineCommand[]): string[] {
+  if (lines.length <= 1) return lines.map((l) => l.id!);
+  const THRESH = 1e-4;
+  const remaining = new Set(lines.map((l) => l.id!));
+  const ordered: import('@lib/types').LineCommand[] = [lines[0]];
+  remaining.delete(lines[0].id!);
+
+  // Extend forward (endPoint of tail matches startPoint of next)
+  let changed = true;
+  while (changed) {
+    changed = false;
+    const tail = ordered[ordered.length - 1];
+    for (const l of lines) {
+      if (!remaining.has(l.id!)) continue;
+      if (Math.hypot(tail.endPoint[0] - l.startPoint[0], tail.endPoint[1] - l.startPoint[1]) < THRESH) {
+        ordered.push(l); remaining.delete(l.id!); changed = true; break;
+      }
+    }
+  }
+
+  // Extend backward (startPoint of head matches endPoint of prev)
+  changed = true;
+  while (changed) {
+    changed = false;
+    const head = ordered[0];
+    for (const l of lines) {
+      if (!remaining.has(l.id!)) continue;
+      if (Math.hypot(l.endPoint[0] - head.startPoint[0], l.endPoint[1] - head.startPoint[1]) < THRESH) {
+        ordered.unshift(l); remaining.delete(l.id!); changed = true; break;
+      }
+    }
+  }
+
+  // If we couldn't chain everything, fall back to original IDs
+  if (remaining.size > 0) return lines.map((l) => l.id!);
+  return ordered.map((l) => l.id!);
+}
+
+/**
  * Expand selectedIds to include children of any selected Group so that the
  * children are rendered as highlighted when their parent group is selected.
  */
@@ -328,9 +414,10 @@ function renderFrame(
   if (!isCalibrating) {
     if (commands.length > 0) {
       const expandedIds = expandSelectedIds(commands, selectedIds);
+      const connectedStarts = computeConnectedStarts(commands);
 
       for (const cmd of commands) {
-        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves);
+        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts);
       }
     } else if (!imgEl) {
       ctx.fillStyle = '#6b7280';
@@ -489,6 +576,10 @@ export default function Canvas() {
   );
 
   const insertAfterSelection = useProgramStore((s) => s.insertAfterSelection);
+  const splitLine            = useProgramStore((s) => s.splitLine);
+  const joinLines            = useProgramStore((s) => s.joinLines);
+
+  const { showMenu: showContextMenuForSelection, showPasteOnlyMenu } = useCommandContextMenu();
 
   // Placement mode refs (must be after activeTool declaration)
   const placementLineStartRef = useRef<[number, number, number] | null>(null);
@@ -507,6 +598,12 @@ export default function Canvas() {
   const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
 
   // Stable refs for use inside window-level callbacks
+  // ── Split / join hover state ──────────────────────────────────────────────
+  type SplitHover = { cmdId: string; splitPoint: [number,number,number]; sx: number; sy: number } | null;
+  type JoinHover  = { handle: import('./handles').Handle } | null;
+  const splitHoverRef = useRef<SplitHover>(null);
+  const joinHoverRef  = useRef<JoinHover>(null);
+
   const areaFillPolygonRef      = useRef(areaFillPolygon);
   const areaFillClosedRef       = useRef(areaFillClosed);
   const areaFillPreviewCmdsRef  = useRef(areaFillPreviewCmds);
@@ -770,6 +867,35 @@ export default function Canvas() {
           polyActiveVertIdxRef.current,
         );
       }
+
+      // ── Split-line hover dot ──────────────────────────────────────────────
+      if (activeToolRef.current === 'split-line' && splitHoverRef.current) {
+        const { sx: hsx, sy: hsy } = splitHoverRef.current;
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(hsx, hsy, 6, 0, Math.PI * 2);
+        ctx.fillStyle = '#f59e0b';
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // ── Join-lines hover highlight ────────────────────────────────────────
+      if (activeToolRef.current === 'join-lines' && joinHoverRef.current) {
+        const h = joinHoverRef.current.handle;
+        const [hsx, hsy] = worldToScreen(h.wx, h.wy, cameraRef.current);
+        ctx.save();
+        ctx.beginPath();
+        ctx.arc(hsx, hsy, 9, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
+        ctx.fill();
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        ctx.restore();
+      }
     };
     requestAnimationFrame(drawRef.current);
   }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds]);
@@ -847,7 +973,10 @@ export default function Canvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && activeToolRef.current) {
         if (activeToolRef.current === 'area-fill') clearAreaFill();
+        splitHoverRef.current = null;
+        joinHoverRef.current = null;
         setActiveTool(null);
+        requestAnimationFrame(drawRef.current);
         return;
       }
       if (e.code === 'Space' && !e.repeat) {
@@ -1247,6 +1376,44 @@ export default function Canvas() {
           return;
         }
 
+        // ── Split-line click ──────────────────────────────────────────────
+        if (activeToolRef.current === 'split-line') {
+          const hit = splitHoverRef.current;
+          if (hit) {
+            splitLine(hit.cmdId, hit.splitPoint);
+            splitHoverRef.current = null;
+          }
+          return;
+        }
+
+        // ── Join-lines click ──────────────────────────────────────────────
+        if (activeToolRef.current === 'join-lines') {
+          const jh = joinHoverRef.current;
+          if (!jh) return;
+          const selIds = selectedCommandIdsRef.current;
+          const cmds = commandsRef.current;
+          const selectedLines: LineCommand[] = [];
+          function collectSelectedLines(cs: PatternCommand[]) {
+            for (const c of cs) {
+              if (c.kind === 'Line' && c.id && selIds.has(c.id)) {
+                selectedLines.push(c as LineCommand);
+              } else if (c.kind === 'Group') {
+                collectSelectedLines(c.commands);
+              }
+            }
+          }
+          collectSelectedLines(cmds);
+          if (selectedLines.length >= 2) {
+            const orderedIds = orderLineChain(selectedLines);
+            if (orderedIds.length >= 2) {
+              joinLines(orderedIds);
+              clearSelection();
+              joinHoverRef.current = null;
+            }
+          }
+          return;
+        }
+
         // ── Placement mode ────────────────────────────────────────────────
         if (activeToolRef.current) {
           const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
@@ -1324,6 +1491,7 @@ export default function Canvas() {
       imgEl, startHandleDrag, startCalibScaleDrag,
       insertAfterSelection, setActiveTool, placementPhase,
       setAreaFillPolygon, startPolyDrag,
+      splitLine, joinLines,
     ],
   );
 
@@ -1377,6 +1545,34 @@ export default function Canvas() {
           }
         }
 
+        requestAnimationFrame(drawRef.current);
+        return;
+      }
+
+      // ── Split-line hover ─────────────────────────────────────────────────
+      if (activeToolRef.current === 'split-line') {
+        const hit = hitTestLineForSplit(sx, sy, commandsRef.current, cameraRef.current);
+        splitHoverRef.current = hit;
+        if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+        requestAnimationFrame(drawRef.current);
+        return;
+      }
+
+      // ── Join-lines hover ─────────────────────────────────────────────────
+      if (activeToolRef.current === 'join-lines') {
+        const selIds = selectedCommandIdsRef.current;
+        if (selIds.size >= 2) {
+          const cmds = commandsRef.current;
+          const expIds = expandSelectedIds(cmds, selIds);
+          const handles = computeHandles(cmds, expIds);
+          const junctionHandles = handles.filter((h) => h.role === 'junction');
+          const hit = hitTestHandle(sx, sy, junctionHandles, cameraRef.current);
+          joinHoverRef.current = hit ? { handle: hit } : null;
+          if (canvasRef.current) canvasRef.current.style.cursor = hit ? 'pointer' : 'crosshair';
+        } else {
+          joinHoverRef.current = null;
+          if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+        }
         requestAnimationFrame(drawRef.current);
         return;
       }
@@ -1477,23 +1673,58 @@ export default function Canvas() {
     [setBackgroundImage, patternKey],
   );
 
-  // ── Right-click: remove polygon vertex ───────────────────────────────────
+  // ── Right-click ───────────────────────────────────────────────────────────
 
   const onContextMenu = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
-      if (activeToolRef.current !== 'area-fill' || !areaFillClosedRef.current) return;
+      // Area fill mode: vertex removal
+      if (activeToolRef.current === 'area-fill' && areaFillClosedRef.current) {
+        e.preventDefault();
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        const verts = areaFillPolygonRef.current;
+        const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+        if (vIdx !== -1 && verts.length > 3) {
+          setAreaFillPolygon(verts.filter((_, i) => i !== vIdx));
+        }
+        return;
+      }
+
+      // Normal mode: command context menu
+      if (isCalibrating || activeToolRef.current) return;
       e.preventDefault();
+
       const rect = canvasRef.current!.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
-      const verts = areaFillPolygonRef.current;
-      const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
-      if (vIdx === -1) return;
-      if (verts.length <= 3) return; // minimum 3 enforced
-      const newVerts = verts.filter((_, i) => i !== vIdx);
-      setAreaFillPolygon(newVerts);
+      const cmds = commandsRef.current;
+      const hitIdx = hitTest(sx, sy, cmds, cameraRef.current);
+
+      if (hitIdx === null) {
+        // Empty space — show paste-only menu if clipboard has items
+        showPasteOnlyMenu(e.clientX, e.clientY);
+        return;
+      }
+
+      const hitCmd = cmds[hitIdx];
+      const hitId = hitCmd.id;
+      if (!hitId) return;
+
+      // Select if not already in selection
+      const currentIds = selectedCommandIdsRef.current;
+      if (!currentIds.has(hitId)) {
+        if (e.ctrlKey || e.metaKey) selectToggle(hitId);
+        else selectOne(hitId);
+      }
+
+      showContextMenuForSelection(e.clientX, e.clientY, cmds);
     },
-    [setAreaFillPolygon],
+    [
+      isCalibrating, setAreaFillPolygon,
+      selectOne, selectToggle,
+      showContextMenuForSelection, showPasteOnlyMenu,
+    ],
   );
 
   // Cleanup poly drag on unmount

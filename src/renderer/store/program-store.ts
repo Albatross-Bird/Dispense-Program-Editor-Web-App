@@ -60,6 +60,38 @@ function makeEntry(label: string, snapshot: Program): HistoryEntry {
   return { id: genId(), label, timestamp: Date.now(), snapshot };
 }
 
+/** Recursively collect commands whose IDs are in `ids`. If a group is selected,
+ *  the whole group is included (children not collected separately). */
+function collectSelected(cmds: PatternCommand[], ids: Set<string>): PatternCommand[] {
+  const result: PatternCommand[] = [];
+  for (const c of cmds) {
+    if (c.id && ids.has(c.id)) {
+      result.push(c);
+    } else if (c.kind === 'Group') {
+      result.push(...collectSelected(c.commands, ids));
+    }
+  }
+  return result;
+}
+
+/** Remove commands matching `ids` recursively. */
+function removeSelected(cmds: PatternCommand[], ids: Set<string>): PatternCommand[] {
+  return cmds
+    .filter((c) => !c.id || !ids.has(c.id))
+    .map((c) =>
+      c.kind === 'Group' ? { ...c, commands: removeSelected(c.commands, ids) } : c,
+    );
+}
+
+/** Deep-clone and assign fresh IDs to a command list. */
+function reIdCommands(cmds: PatternCommand[]): PatternCommand[] {
+  return cmds.map((cmd): PatternCommand => {
+    const newId = genId();
+    if (cmd.kind === 'Group') return { ...cmd, id: newId, commands: reIdCommands(cmd.commands) };
+    return { ...cmd, id: newId };
+  });
+}
+
 // ── Re-export genId so Canvas can use the same generator ─────────────────────
 export { genId };
 
@@ -100,6 +132,18 @@ interface ProgramStore {
   ungroupSelection: () => void;
   /** Replace the top-level command matching `id` in the selected pattern. */
   replaceCommand: (id: string, newCmd: PatternCommand, label: string) => void;
+  /** Split a Line command into two at the given world-space point. */
+  splitLine: (cmdId: string, splitPoint: [number, number, number]) => void;
+  /** Join an ordered list of connected Line commands into one. */
+  joinLines: (cmdIds: string[]) => void;
+
+  // ── Clipboard ────────────────────────────────────────────────────────────
+  clipboard: PatternCommand[] | null;
+  copySelection: () => void;
+  cutSelection: () => void;
+  /** Paste clipboard contents above the first selected command. */
+  pasteAboveSelection: () => void;
+  deleteSelection: () => void;
 }
 
 declare global {
@@ -143,6 +187,7 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
   lastSelectedId: null,
   historyEntries: [],
   historyCurrentIndex: -1,
+  clipboard: null,
 
   load: async () => {
     const result = await window.electronAPI.openFile();
@@ -486,6 +531,185 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: newCmd.id ? new Set([newCmd.id]) : new Set<string>(),
       lastSelectedId: newCmd.id ?? null,
+    });
+  },
+
+  splitLine: (cmdId: string, splitPoint: [number, number, number]) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    // Flatten search: also look inside groups
+    function splitInCmds(cmds: PatternCommand[]): PatternCommand[] | null {
+      for (let i = 0; i < cmds.length; i++) {
+        const cmd = cmds[i];
+        if (cmd.kind === 'Line' && cmd.id === cmdId) {
+          const keyword = cmd.commandKeyword ?? 'Line';
+          const idA = genId(), idB = genId();
+          const cmdA: LineCommand = {
+            kind: 'Line', id: idA, commandKeyword: keyword,
+            disabled: cmd.disabled, valve: cmd.valve,
+            startPoint: [...cmd.startPoint] as [number,number,number],
+            endPoint: [...splitPoint] as [number,number,number],
+            flowRate: { ...cmd.flowRate },
+          };
+          const cmdB: LineCommand = {
+            kind: 'Line', id: idB, commandKeyword: keyword,
+            disabled: cmd.disabled, valve: cmd.valve,
+            startPoint: [...splitPoint] as [number,number,number],
+            endPoint: [...cmd.endPoint] as [number,number,number],
+            flowRate: { ...cmd.flowRate },
+          };
+          return [...cmds.slice(0, i), cmdA, cmdB, ...cmds.slice(i + 1)];
+        }
+        if (cmd.kind === 'Group') {
+          const inner = splitInCmds(cmd.commands);
+          if (inner) return [...cmds.slice(0, i), { ...cmd, commands: inner }, ...cmds.slice(i + 1)];
+        }
+      }
+      return null;
+    }
+
+    const newCmds = splitInCmds(pattern.commands);
+    if (!newCmds) return;
+
+    // Find keyword for label
+    const origCmd = findById(pattern.commands, cmdId) as LineCommand | null;
+    const label = `Split ${origCmd?.commandKeyword === 'LineFix' ? 'linefix' : 'line'}`;
+
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
+    });
+  },
+
+  joinLines: (cmdIds: string[]) => {
+    if (cmdIds.length < 2) return;
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    // Collect ordered lines from flat command list (groups not supported for join)
+    const cmds = pattern.commands;
+    const lineMap = new Map<string, LineCommand>();
+    for (const c of cmds) {
+      if (c.kind === 'Line' && c.id && cmdIds.includes(c.id)) lineMap.set(c.id, c);
+    }
+    if (lineMap.size < 2) return;
+
+    const ordered = cmdIds.map((id) => lineMap.get(id)).filter((c): c is LineCommand => !!c);
+    if (ordered.length < 2) return;
+
+    const first = ordered[0];
+    const last  = ordered[ordered.length - 1];
+    const keyword = first.commandKeyword ?? 'Line';
+
+    const merged: LineCommand = {
+      kind: 'Line', id: genId(), commandKeyword: keyword,
+      disabled: first.disabled, valve: first.valve,
+      startPoint: [...first.startPoint] as [number,number,number],
+      endPoint:   [...last.endPoint]    as [number,number,number],
+      flowRate: { ...first.flowRate },
+    };
+
+    const idSet = new Set(cmdIds);
+    let inserted = false;
+    const newCmds: PatternCommand[] = [];
+    for (const c of cmds) {
+      if (c.id && idSet.has(c.id)) {
+        if (!inserted) { newCmds.push(merged); inserted = true; }
+      } else {
+        newCmds.push(c);
+      }
+    }
+
+    const n = ordered.length;
+    const label = n === 2
+      ? `Join ${keyword === 'LineFix' ? 'linefixes' : 'lines'}`
+      : `Join ${n} ${keyword === 'LineFix' ? 'linefixes' : 'lines'}`;
+
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: merged.id ? new Set([merged.id]) : new Set<string>(),
+      lastSelectedId: merged.id ?? null,
+    });
+  },
+
+  copySelection: () => {
+    const { program, selectedPatternName, selectedCommandIds } = get();
+    if (!program || !selectedPatternName || selectedCommandIds.size === 0) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    const copied = cloneCmds(collectSelected(pattern.commands, selectedCommandIds));
+    set({ clipboard: copied });
+  },
+
+  cutSelection: () => {
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName || selectedCommandIds.size === 0) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    const copied = cloneCmds(collectSelected(pattern.commands, selectedCommandIds));
+    const newCmds = removeSelected(pattern.commands, selectedCommandIds);
+    const n = selectedCommandIds.size;
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Cut ${n} command${n > 1 ? 's' : ''}`, newProgram);
+    set({
+      clipboard: copied,
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
+    });
+  },
+
+  pasteAboveSelection: () => {
+    const { clipboard, program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
+    if (!clipboard || clipboard.length === 0) return;
+    if (!program || !selectedPatternName || selectedCommandIds.size === 0) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    const pasted = reIdCommands(cloneCmds(clipboard));
+    // Insert before the first selected top-level command
+    let insertIdx = pattern.commands.findIndex((c) => c.id && selectedCommandIds.has(c.id));
+    if (insertIdx === -1) insertIdx = pattern.commands.length;
+    const newCmds = [
+      ...pattern.commands.slice(0, insertIdx),
+      ...pasted,
+      ...pattern.commands.slice(insertIdx),
+    ];
+    const n = pasted.length;
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Paste ${n} command${n > 1 ? 's' : ''}`, newProgram);
+    const pastedIds = pasted.map((c) => c.id).filter((id): id is string => Boolean(id));
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set(pastedIds),
+      lastSelectedId: pastedIds[pastedIds.length - 1] ?? null,
+    });
+  },
+
+  deleteSelection: () => {
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName || selectedCommandIds.size === 0) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    const newCmds = removeSelected(pattern.commands, selectedCommandIds);
+    const n = selectedCommandIds.size;
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Delete ${n} command${n > 1 ? 's' : ''}`, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
     });
   },
 }));

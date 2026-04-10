@@ -56,6 +56,7 @@ export function drawLine(
   cmd: LineCommand,
   cam: Camera,
   selected: boolean,
+  suppressStartDot = false,
 ) {
   const color = valveColor(cmd.valve);
   const [x1, y1] = worldToScreen(cmd.startPoint[0], cmd.startPoint[1], cam);
@@ -74,10 +75,12 @@ export function drawLine(
   const arrowSize = Math.max(5, Math.min(10, cam.zoom * 1.5));
   arrowhead(ctx, x1, y1, x2, y2, arrowSize);
 
-  // Start dot
-  ctx.beginPath();
-  ctx.arc(x1, y1, 2, 0, Math.PI * 2);
-  ctx.fill();
+  // Start dot — omitted when a previous line already ends at this point
+  if (!suppressStartDot) {
+    ctx.beginPath();
+    ctx.arc(x1, y1, 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
 
   ctx.restore();
 }
@@ -158,9 +161,42 @@ export function drawLaser(
 }
 
 /**
+ * Pre-compute the set of start-point keys where a previous consecutive Line
+ * ends at the same coordinate. These start dots should be suppressed.
+ * Non-Line commands (Comments, Marks, etc.) break the chain.
+ */
+export function computeConnectedStarts(commands: PatternCommand[]): Set<string> {
+  const connected = new Set<string>();
+
+  function ptKey(p: readonly [number, number, number] | number[]): string {
+    return `${(p[0] as number).toFixed(3)},${(p[1] as number).toFixed(3)},${(p[2] as number).toFixed(3)}`;
+  }
+
+  function visit(cmds: PatternCommand[], prevEndKey: string | null): string | null {
+    for (const cmd of cmds) {
+      if (cmd.kind === 'Line') {
+        const sk = ptKey(cmd.startPoint);
+        if (prevEndKey !== null && prevEndKey === sk) connected.add(sk);
+        prevEndKey = ptKey(cmd.endPoint);
+      } else if (cmd.kind === 'Group') {
+        prevEndKey = visit(cmd.commands, prevEndKey);
+      } else {
+        // Comments, Marks, Dots, Raw, etc. break the line chain
+        prevEndKey = null;
+      }
+    }
+    return prevEndKey;
+  }
+
+  visit(commands, null);
+  return connected;
+}
+
+/**
  * Dispatch draw for any command type.
  * `selectedIds` is the set of selected command IDs (pre-expanded for groups).
  * `hiddenValves` is the set of valve numbers whose Line/Dot commands should be skipped.
+ * `connectedStarts` is the pre-computed set of start-point keys with suppressed dots.
  * Comment and Raw produce no canvas output.
  */
 export function drawCommand(
@@ -169,20 +205,25 @@ export function drawCommand(
   cam: Camera,
   selectedIds: Set<string>,
   hiddenValves: Set<number> = new Set(),
+  connectedStarts: Set<string> = new Set(),
 ) {
   const isSelected = Boolean(cmd.id && selectedIds.has(cmd.id));
 
   switch (cmd.kind) {
-    case 'Line':
-      if (!hiddenValves.has(cmd.valve)) drawLine(ctx, cmd, cam, isSelected);
+    case 'Line': {
+      if (!hiddenValves.has(cmd.valve)) {
+        const sk = `${cmd.startPoint[0].toFixed(3)},${cmd.startPoint[1].toFixed(3)},${cmd.startPoint[2].toFixed(3)}`;
+        drawLine(ctx, cmd, cam, isSelected, connectedStarts.has(sk));
+      }
       break;
+    }
     case 'Dot':
       if (!hiddenValves.has(cmd.valve)) drawDot(ctx, cmd, cam, isSelected);
       break;
     case 'Mark':  drawMark(ctx, cmd, cam, isSelected);  break;
     case 'Laser': drawLaser(ctx, cmd, cam, isSelected); break;
     case 'Group':
-      for (const child of cmd.commands) drawCommand(ctx, child, cam, selectedIds, hiddenValves);
+      for (const child of cmd.commands) drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts);
       break;
     case 'Comment':
     case 'Raw':

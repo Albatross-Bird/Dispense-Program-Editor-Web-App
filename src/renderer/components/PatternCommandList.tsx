@@ -132,6 +132,7 @@ interface PatternCommandListProps {
   lastSelectedId: string | null;
   onSelect: (id: string, mode: SelectMode, allIds: string[]) => void;
   onClear: () => void;
+  onContextMenu?: (e: React.MouseEvent, cmdId: string | undefined) => void;
 }
 
 export default function PatternCommandList({
@@ -140,6 +141,7 @@ export default function PatternCommandList({
   lastSelectedId,
   onSelect,
   onClear,
+  onContextMenu,
 }: PatternCommandListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
@@ -252,6 +254,12 @@ export default function PatternCommandList({
                   if (cmdId) handleRowClick(e, cmdId);
                   handleGroupToggle(item.key);
                 }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
+                }}
                 onMouseEnter={() => setHoverKey(item.key)}
                 onMouseLeave={() => setHoverKey(null)}
                 className={`flex items-center gap-1.5 px-2 py-[3px] cursor-pointer rounded-sm text-xs ${rowBg}`}
@@ -283,6 +291,12 @@ export default function PatternCommandList({
                 data-id={cmdId}
                 onClick={(e) => {
                   if (cmdId) handleRowClick(e, cmdId);
+                }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
                 }}
                 onMouseEnter={() => setHoverKey(item.key)}
                 onMouseLeave={() => setHoverKey(null)}
@@ -336,6 +350,12 @@ export default function PatternCommandList({
               <div
                 data-id={cmdId}
                 onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
+                }}
                 onMouseEnter={() => setHoverKey(item.key)}
                 onMouseLeave={() => setHoverKey(null)}
                 className={[
@@ -361,7 +381,17 @@ export default function PatternCommandList({
         if (cmd.kind === 'Comment') {
           return (
             <div key={item.key} style={{ paddingLeft: indent }}>
-              <div className="flex items-center gap-1 pr-2 py-[3px] rounded-sm">
+              <div
+                data-id={cmdId}
+                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
+                }}
+                className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+              >
                 <div style={{ width: 16, flexShrink: 0 }} />
                 <span className="font-mono text-[10px] text-green-500 truncate">
                   # {cmd.text}
@@ -376,7 +406,17 @@ export default function PatternCommandList({
           const preview = cmd.raw.length > 48 ? cmd.raw.slice(0, 48) + '…' : cmd.raw;
           return (
             <div key={item.key} style={{ paddingLeft: indent }}>
-              <div className="flex items-center gap-1.5 pr-2 py-[3px] rounded-sm">
+              <div
+                data-id={cmdId}
+                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
+                }}
+                className={`flex items-center gap-1.5 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+              >
                 <div style={{ width: 16, flexShrink: 0 }} />
                 <span className="font-mono text-[10px] text-gray-500 shrink-0">{cmd.kind}</span>
                 <span className="font-mono text-[10px] text-gray-600 truncate">{preview}</span>
@@ -390,7 +430,17 @@ export default function PatternCommandList({
           const preview = cmd.raw.length > 60 ? cmd.raw.slice(0, 60) + '…' : cmd.raw;
           return (
             <div key={item.key} style={{ paddingLeft: indent }}>
-              <div className="flex items-center gap-1 pr-2 py-[3px] rounded-sm">
+              <div
+                data-id={cmdId}
+                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                onContextMenu={(e) => {
+                  if (cmdId && !selectedCommandIds.has(cmdId)) {
+                    onSelect(cmdId, 'single', allVisibleIds);
+                  }
+                  onContextMenu?.(e, cmdId);
+                }}
+                className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+              >
                 <div style={{ width: 16, flexShrink: 0 }} />
                 <span className="font-mono text-[10px] text-gray-600 italic truncate">{preview}</span>
               </div>

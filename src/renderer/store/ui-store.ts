@@ -17,7 +17,23 @@ export interface BackgroundImage {
   dataUrl: string;
 }
 
-export type ActiveTool = 'new-line' | 'new-dot' | 'area-fill' | null;
+export type ActiveTool = 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | null;
+
+export interface ContextMenuItem {
+  label?: string;
+  icon?: 'copy' | 'cut' | 'paste' | 'delete' | 'edit';
+  shortcut?: string;
+  disabled?: boolean;
+  disabledReason?: string;
+  separator?: boolean;
+  action?: () => void;
+}
+
+export interface ContextMenuState {
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
+}
 
 interface UIStore {
   splitRatio: number;
@@ -51,6 +67,10 @@ interface UIStore {
   setAreaFillPreviewCmds: (cmds: PatternCommand[]) => void;
   setAreaFillEditGroupId: (id: string | null) => void;
   clearAreaFill: () => void;
+
+  contextMenu: ContextMenuState | null;
+  showContextMenu: (state: ContextMenuState) => void;
+  hideContextMenu: () => void;
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -65,6 +85,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   areaFillClosed: false,
   areaFillPreviewCmds: [],
   areaFillEditGroupId: null,
+  contextMenu: null,
 
   setSplitRatio: (ratio: number) => {
     localStorage.setItem(SPLIT_KEY, String(ratio));
@@ -84,4 +105,8 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setAreaFillPreviewCmds: (areaFillPreviewCmds: PatternCommand[]) => set({ areaFillPreviewCmds }),
   setAreaFillEditGroupId: (areaFillEditGroupId: string | null) => set({ areaFillEditGroupId }),
   clearAreaFill: () => set({ areaFillPolygon: [], areaFillClosed: false, areaFillPreviewCmds: [], areaFillEditGroupId: null }),
+
+  contextMenu: null,
+  showContextMenu: (state: ContextMenuState) => set({ contextMenu: state }),
+  hideContextMenu: () => set({ contextMenu: null }),
 }));

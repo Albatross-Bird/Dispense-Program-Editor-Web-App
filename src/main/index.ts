@@ -1,4 +1,4 @@
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, Menu } from 'electron';
 import { join } from 'path';
 import { registerIpcHandlers } from './ipc-handlers';
 
@@ -24,14 +24,13 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    icon: join(app.getAppPath(), 'MYE.ico'),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
   });
-
-  win.webContents.openDevTools();
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
@@ -43,6 +42,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  Menu.setApplicationMenu(null);
   registerIpcHandlers();
   createWindow();
 });

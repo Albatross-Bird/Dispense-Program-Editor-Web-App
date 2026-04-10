@@ -30,6 +30,9 @@ export interface Handle {
   targets: HandleTarget[];
   /** World-space angle (radians) of the line direction. Only set for 'line-end'. */
   angle?: number;
+  /** Screen-space hit radius in px. When set, hitTestHandle uses this instead of the
+   *  global threshold so handles with larger visuals remain fully clickable at any zoom. */
+  hitRadiusPx?: number;
 }
 
 // ── Deep-clone helpers ────────────────────────────────────────────────────────
@@ -116,12 +119,18 @@ function flattenSelected(
 /**
  * Build the list of handles for the current selection.
  *
- * @param cmds       Commands to search (may be the working copy during drag).
- * @param expandedIds  Selected IDs after group expansion.
+ * @param cmds            Commands to search (may be the working copy during drag).
+ * @param expandedIds     Selected IDs after group expansion.
+ * @param cam             Camera state — when provided, hit radii scale with zoom.
+ * @param lineThicknesses Per-valve line thickness in mm (index = valve-1).
+ * @param dotSizes        Per-valve dot diameter in mm (index = valve-1).
  */
 export function computeHandles(
   cmds: PatternCommand[],
   expandedIds: Set<string>,
+  cam?: Camera,
+  lineThicknesses?: number[],
+  dotSizes?: number[],
 ): Handle[] {
   const selected = flattenSelected(cmds, expandedIds);
   if (selected.length === 0) return [];
@@ -132,12 +141,22 @@ export function computeHandles(
     const cmd = selected[i];
     if (!cmd.id) continue;
 
+    // ── Per-command hit sizing (mirrors drawLine / drawDot sizing formulas) ──
+    const valve    = cmd.valve;
+    const thickMm  = lineThicknesses ? (lineThicknesses[valve - 1] ?? 0.5) : 0.5;
+    const basePx   = cam ? thickMm * cam.zoom : null;
+    const arrowPx  = basePx !== null ? Math.max(4, basePx * 3.5)  : null; // arrowSize
+    const dotRPx   = basePx !== null ? Math.max(1.5, basePx * 1.2) : null; // dotRadius
+
     // ── Dot ───────────────────────────────────────────────────────────────────
     if (cmd.kind === 'Dot') {
+      const dotMm   = dotSizes ? (dotSizes[valve - 1] ?? 1.0) : 1.0;
+      const rPx     = cam ? (dotMm / 2) * cam.zoom : null;
       handles.push({
         wx: cmd.point[0], wy: cmd.point[1], wz: cmd.point[2],
         role: 'dot',
         targets: [{ cmdId: cmd.id, field: 'point' }],
+        hitRadiusPx: rPx ?? undefined,
       });
       continue;
     }
@@ -153,10 +172,12 @@ export function computeHandles(
         coordKey(cmd.startPoint as [number, number, number]);
 
     if (!startIsJunction) {
+      // Square hit: circumscribed circle of the square covers all corners
       handles.push({
         wx: cmd.startPoint[0], wy: cmd.startPoint[1], wz: cmd.startPoint[2],
         role: 'line-start',
         targets: [{ cmdId: cmd.id, field: 'startPoint' }],
+        hitRadiusPx: dotRPx !== null ? dotRPx * Math.SQRT2 : undefined,
       });
     }
 
@@ -175,6 +196,7 @@ export function computeHandles(
           { cmdId: cmd.id,   field: 'endPoint'   },
           { cmdId: next!.id, field: 'startPoint' },
         ],
+        hitRadiusPx: arrowPx ?? undefined,
       });
     } else {
       const angle = Math.atan2(
@@ -186,6 +208,7 @@ export function computeHandles(
         role: 'line-end',
         targets: [{ cmdId: cmd.id, field: 'endPoint' }],
         angle,
+        hitRadiusPx: arrowPx ?? undefined,
       });
     }
   }
@@ -220,22 +243,10 @@ export function drawHandles(
       ctx.stroke();
 
     } else if (h.role === 'line-start') {
-      // Square — white outline, transparent fill
-      const s = 5;
-      ctx.beginPath();
-      ctx.rect(sx - s, sy - s, s * 2, s * 2);
-      ctx.stroke();
+      // Visual is rendered by drawLine's selected-start-dot; nothing extra here.
 
     } else if (h.role === 'line-end') {
-      // Arrowhead outline — same shape as the line's arrow, transparent fill
-      const size = 9;
-      const a = h.angle ?? 0;
-      ctx.beginPath();
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx - size * Math.cos(a - Math.PI / 6), sy - size * Math.sin(a - Math.PI / 6));
-      ctx.moveTo(sx, sy);
-      ctx.lineTo(sx - size * Math.cos(a + Math.PI / 6), sy - size * Math.sin(a + Math.PI / 6));
-      ctx.stroke();
+      // Visual is rendered by drawLine's selected-arrowhead rendering; nothing extra here.
 
     } else {
       // Dot — selection ring already drawn by drawDot(); nothing extra needed here.
@@ -247,7 +258,9 @@ export function drawHandles(
 
 // ── Handle hit testing ────────────────────────────────────────────────────────
 
-/** Return the handle closest to (sx,sy) within `threshold` screen pixels. */
+/** Return the handle closest to (sx,sy) that is within its hit radius.
+ *  Each handle uses its own `hitRadiusPx` when set; `threshold` is the
+ *  fallback for handles without one (e.g. junction diamonds). */
 export function hitTestHandle(
   sx: number,
   sy: number,
@@ -256,11 +269,12 @@ export function hitTestHandle(
   threshold = 11,
 ): Handle | null {
   let best: Handle | null = null;
-  let bestDist = threshold;
+  let bestDist = Infinity;
   for (const h of handles) {
     const [hsx, hsy] = worldToScreen(h.wx, h.wy, cam);
     const d = Math.hypot(sx - hsx, sy - hsy);
-    if (d < bestDist) { bestDist = d; best = h; }
+    const r = h.hitRadiusPx ?? threshold;
+    if (d <= r && d < bestDist) { bestDist = d; best = h; }
   }
   return best;
 }

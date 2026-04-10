@@ -8,7 +8,9 @@ import type { AffineTransform } from '@lib/affine';
 import { computeAffine } from '@lib/affine';
 import type { Camera } from './camera';
 import { fitCamera, screenToWorld, worldToScreen, zoomAt } from './camera';
-import { collectPoints, computeConnectedStarts, drawCommand, extractMarkFiducials, hitTest, valveColor } from './renderers';
+import { collectPoints, computeConnectedStarts, computeSelectedJunctionStarts, drawCommand, extractMarkFiducials, hitTest, valveColor } from './renderers';
+import type { RenderConfig } from './renderers';
+import { useSettingsStore } from '../../store/settings-store';
 import {
   computeHandles, drawHandles, hitTestHandle,
   deepCloneCommands, clearRawForModified, findCmdById,
@@ -398,6 +400,7 @@ function renderFrame(
   scalingCalibIdx: number | null,
   activeCalibIdx: number | null,
   hiddenValves: Set<number>,
+  renderConfig?: RenderConfig,
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = '#374151';
@@ -415,9 +418,10 @@ function renderFrame(
     if (commands.length > 0) {
       const expandedIds = expandSelectedIds(commands, selectedIds);
       const connectedStarts = computeConnectedStarts(commands);
+      const selectedJunctionStarts = computeSelectedJunctionStarts(commands, expandedIds);
 
       for (const cmd of commands) {
-        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts);
+        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts);
       }
     } else if (!imgEl) {
       ctx.fillStyle = '#6b7280';
@@ -442,54 +446,161 @@ interface LayersBoxProps {
   hasImage: boolean;
   imageVisible: boolean;
   onToggleImage: () => void;
+  lineThicknesses: number[];
+  dotSizes: number[];
+  onLineThicknessChange: (paramIndex: number, mm: number) => void;
+  onDotSizeChange: (paramIndex: number, mm: number) => void;
 }
 
-function LayersBox({ valves, hiddenValves, onToggleValve, hasImage, imageVisible, onToggleImage }: LayersBoxProps) {
-  if (valves.size === 0 && !hasImage) return null;
-
+function ThickLineIcon({ color }: { color: string }) {
   return (
-    <div className="absolute top-2 left-2 bg-gray-900/85 border border-gray-700/60 rounded-md py-1.5 px-1 select-none z-10 min-w-[7rem]">
-      <div className="text-[9px] font-semibold text-gray-500 uppercase tracking-widest px-1.5 pb-1">Layers</div>
-
-      {hasImage && (
-        <LayerRow
-          label="Background"
-          color="#9ca3af"
-          visible={imageVisible}
-          onToggle={onToggleImage}
-        />
-      )}
-
-      {[...valves].sort((a, b) => a - b).map((v) => (
-        <LayerRow
-          key={v}
-          label={`Param ${v}`}
-          color={valveColor(v)}
-          visible={!hiddenValves.has(v)}
-          onToggle={() => onToggleValve(v)}
-        />
-      ))}
-    </div>
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <line x1="1" y1="6" x2="11" y2="6" stroke={color} strokeWidth="2" strokeLinecap="round" />
+    </svg>
   );
 }
 
-function LayerRow({ label, color, visible, onToggle }: { label: string; color: string; visible: boolean; onToggle: () => void }) {
+function DotSizeIcon({ color }: { color: string }) {
   return (
-    <button
-      onClick={onToggle}
-      className="flex items-center gap-1.5 w-full text-left rounded px-1.5 py-0.5 hover:bg-gray-700/50 transition-colors"
-    >
-      <div
-        className="w-3 h-3 rounded-sm shrink-0 transition-colors"
-        style={visible
-          ? { backgroundColor: color }
-          : { backgroundColor: 'transparent', border: `1.5px solid ${color}`, opacity: 0.4 }
-        }
-      />
-      <span className={`text-xs transition-colors ${visible ? 'text-gray-200' : 'text-gray-500'}`}>
-        {label}
-      </span>
-    </button>
+    <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+      <circle cx="6" cy="6" r="4" fill={color} />
+    </svg>
+  );
+}
+
+function ThicknessInput({
+  value, onChange, min, max, step,
+}: { value: number; onChange: (v: number) => void; min: number; max: number; step: number }) {
+  const [localVal, setLocalVal] = React.useState(String(value));
+  // Sync if external value changes
+  React.useEffect(() => { setLocalVal(String(value)); }, [value]);
+
+  const commit = () => {
+    const n = parseFloat(localVal);
+    if (!isNaN(n)) onChange(Math.max(min, Math.min(max, n)));
+    else setLocalVal(String(value));
+  };
+
+  return (
+    <input
+      type="number"
+      value={localVal}
+      min={min} max={max} step={step}
+      onChange={(e) => setLocalVal(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } e.stopPropagation(); }}
+      onClick={(e) => e.stopPropagation()}
+      className="w-[46px] bg-gray-800 border border-gray-600/80 rounded px-1 py-0 text-[10px] text-gray-200 text-right focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+    />
+  );
+}
+
+function SlidersIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 11 11" fill="none" strokeLinecap="round">
+      <line x1="1" y1="3" x2="10" y2="3" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="4" cy="3" r="1.4" fill="currentColor" />
+      <line x1="1" y1="8" x2="10" y2="8" stroke="currentColor" strokeWidth="1.2" />
+      <circle cx="7" cy="8" r="1.4" fill="currentColor" />
+    </svg>
+  );
+}
+
+function LayersBox({
+  valves, hiddenValves, onToggleValve,
+  hasImage, imageVisible, onToggleImage,
+  lineThicknesses, dotSizes, onLineThicknessChange, onDotSizeChange,
+}: LayersBoxProps) {
+  const [showSizeControls, setShowSizeControls] = React.useState(false);
+
+  if (valves.size === 0 && !hasImage) return null;
+
+  return (
+    <div className="absolute top-2 left-2 bg-gray-900/90 border border-gray-700/60 rounded-md py-1.5 px-2 select-none z-10">
+      {/* Header row */}
+      <div className="flex items-center gap-1 pb-1">
+        <span className="text-[9px] font-semibold text-gray-500 uppercase tracking-widest flex-1">Layers</span>
+        {showSizeControls && (
+          <>
+            <span className="text-[9px] text-gray-600 w-[58px] text-center">Line</span>
+            <span className="text-[9px] text-gray-600 w-[58px] text-center">Dot</span>
+          </>
+        )}
+        {/* Toggle size controls */}
+        <button
+          onClick={() => setShowSizeControls((v) => !v)}
+          title={showSizeControls ? 'Hide size controls' : 'Show size controls'}
+          className={`flex items-center justify-center w-4 h-4 ml-0.5 rounded transition-colors ${
+            showSizeControls ? 'text-blue-400' : 'text-gray-600 hover:text-gray-400'
+          }`}
+        >
+          <SlidersIcon />
+        </button>
+      </div>
+
+      {hasImage && (
+        <button
+          onClick={onToggleImage}
+          className="flex items-center gap-1.5 w-full text-left rounded px-1 h-[26px] hover:bg-gray-700/50 transition-colors"
+        >
+          <div
+            className="w-3 h-3 rounded-sm shrink-0"
+            style={imageVisible
+              ? { backgroundColor: '#9ca3af' }
+              : { backgroundColor: 'transparent', border: '1.5px solid #9ca3af', opacity: 0.4 }
+            }
+          />
+          <span className={`text-xs flex-1 ${imageVisible ? 'text-gray-200' : 'text-gray-500'}`}>Background</span>
+        </button>
+      )}
+
+      {[...valves].sort((a, b) => a - b).map((v) => {
+        const color = valveColor(v);
+        const visible = !hiddenValves.has(v);
+        const lt = lineThicknesses[v - 1] ?? 0.5;
+        const ds = dotSizes[v - 1] ?? 1.0;
+        return (
+          <div key={v} className="flex items-center gap-1 h-[26px]">
+            {/* Visibility toggle — always visible */}
+            <button
+              onClick={() => onToggleValve(v)}
+              className="flex items-center gap-1.5 flex-1 min-w-0 rounded px-1 h-full hover:bg-gray-700/50 transition-colors"
+            >
+              <div
+                className="w-3 h-3 rounded-sm shrink-0"
+                style={visible
+                  ? { backgroundColor: color }
+                  : { backgroundColor: 'transparent', border: `1.5px solid ${color}`, opacity: 0.4 }
+                }
+              />
+              <span className={`text-xs ${visible ? 'text-gray-200' : 'text-gray-500'}`}>Param {v}</span>
+            </button>
+
+            {/* Size controls — only when expanded */}
+            {showSizeControls && (
+              <>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <ThickLineIcon color={visible ? color : '#4b5563'} />
+                  <ThicknessInput
+                    value={lt}
+                    onChange={(mm) => onLineThicknessChange(v - 1, mm)}
+                    min={0.1} max={5.0} step={0.1}
+                  />
+                </div>
+                <div className="flex items-center gap-0.5 shrink-0">
+                  <DotSizeIcon color={visible ? color : '#4b5563'} />
+                  <ThicknessInput
+                    value={ds}
+                    onChange={(mm) => onDotSizeChange(v - 1, mm)}
+                    min={0.1} max={10.0} step={0.1}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -551,7 +662,6 @@ export default function Canvas() {
   const program              = useProgramStore((s) => s.program);
   const selectedPatternName  = useProgramStore((s) => s.selectedPatternName);
   const selectedCommandIds   = useProgramStore((s) => s.selectedCommandIds);
-  const lastSelectedId       = useProgramStore((s) => s.lastSelectedId);
   const selectOne            = useProgramStore((s) => s.selectOne);
   const selectToggle         = useProgramStore((s) => s.selectToggle);
   const selectRange          = useProgramStore((s) => s.selectRange);
@@ -578,8 +688,22 @@ export default function Canvas() {
   const insertAfterSelection = useProgramStore((s) => s.insertAfterSelection);
   const splitLine            = useProgramStore((s) => s.splitLine);
   const joinLines            = useProgramStore((s) => s.joinLines);
+  const deleteCommand        = useProgramStore((s) => s.deleteCommand);
 
   const { showMenu: showContextMenuForSelection, showPasteOnlyMenu } = useCommandContextMenu();
+
+  const lineThicknesses      = useSettingsStore((s) => s.lineThicknesses);
+  const dotSizes             = useSettingsStore((s) => s.dotSizes);
+  const setLineThickness     = useSettingsStore((s) => s.setLineThickness);
+  const setDotSize           = useSettingsStore((s) => s.setDotSize);
+  // Refs so event-handler callbacks (which close over stale state) always see current values
+  const lineThicknessesRef   = useRef(lineThicknesses);
+  const dotSizesRef          = useRef(dotSizes);
+  useEffect(() => { lineThicknessesRef.current = lineThicknesses; }, [lineThicknesses]);
+  useEffect(() => { dotSizesRef.current = dotSizes; }, [dotSizes]);
+  const activeParam      = useUIStore((s) => s.activeParam);
+  const activeParamRef   = useRef(activeParam);
+  useEffect(() => { activeParamRef.current = activeParam; }, [activeParam]);
 
   // Placement mode refs (must be after activeTool declaration)
   const placementLineStartRef = useRef<[number, number, number] | null>(null);
@@ -601,8 +725,9 @@ export default function Canvas() {
   // ── Split / join hover state ──────────────────────────────────────────────
   type SplitHover = { cmdId: string; splitPoint: [number,number,number]; sx: number; sy: number } | null;
   type JoinHover  = { handle: import('./handles').Handle } | null;
-  const splitHoverRef = useRef<SplitHover>(null);
-  const joinHoverRef  = useRef<JoinHover>(null);
+  const splitHoverRef  = useRef<SplitHover>(null);
+  const joinHoverRef   = useRef<JoinHover>(null);
+  const deleteHoverRef = useRef<number | null>(null); // flat index into commandsRef.current
 
   const areaFillPolygonRef      = useRef(areaFillPolygon);
   const areaFillClosedRef       = useRef(areaFillClosed);
@@ -777,40 +902,6 @@ export default function Canvas() {
     }
   }, [patternKey, clearCalibrationData, imgEl, setZoomLevel]);
 
-  // ── Pan to single selected command if off-screen ──────────────────────────
-
-  useEffect(() => {
-    if (selectedCommandIds.size !== 1 || isCalibrating) return;
-    const [id] = selectedCommandIds;
-    function findById(cmds: PatternCommand[]): PatternCommand | null {
-      for (const c of cmds) {
-        if (c.id === id) return c;
-        if (c.kind === 'Group') { const f = findById(c.commands); if (f) return f; }
-      }
-      return null;
-    }
-    const cmd = findById(commands);
-    if (!cmd) return;
-    let wx: number, wy: number;
-    if (cmd.kind === 'Line') {
-      wx = (cmd.startPoint[0] + cmd.endPoint[0]) / 2;
-      wy = (cmd.startPoint[1] + cmd.endPoint[1]) / 2;
-    } else if (cmd.kind === 'Dot') {
-      wx = cmd.point[0]; wy = cmd.point[1];
-    } else return;
-
-    const canvas = canvasRef.current;
-    if (!canvas || canvas.width === 0) return;
-    const [sx, sy] = worldToScreen(wx, wy, cameraRef.current);
-    const margin = 40;
-    if (sx < margin || sx > canvas.width - margin || sy < margin || sy > canvas.height - margin) {
-      const z = cameraRef.current.zoom;
-      cameraRef.current = { ...cameraRef.current, panX: canvas.width / 2 - wx * z, panY: canvas.height / 2 - wy * z };
-      requestAnimationFrame(drawRef.current);
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedCommandIds]);
-
   // ── Draw loop ─────────────────────────────────────────────────────────────
 
   useEffect(() => {
@@ -833,13 +924,14 @@ export default function Canvas() {
         calibration?.transform ?? null, isCalibrating, calibPixels,
         calibScales, scalingCalibIdx, activeCalibIdx,
         hiddenValves,
+        { lineThicknesses, dotSizes },
       );
 
       // Draw handles on top of the toolpath
       if (!isCalibrating && selectedCommandIds.size > 0) {
         const expandedIds = expandSelectedIds(cmdsToRender, selectedCommandIds);
         if (expandedIds.size > 0) {
-          const handles = computeHandles(cmdsToRender, expandedIds);
+          const handles = computeHandles(cmdsToRender, expandedIds, cameraRef.current, lineThicknesses, dotSizes);
           if (handles.length > 0) drawHandles(ctx, handles, cameraRef.current);
         }
       }
@@ -896,9 +988,43 @@ export default function Canvas() {
         ctx.stroke();
         ctx.restore();
       }
+
+      // ── Delete-item hover — red X ring ───────────────────────────────────
+      if (activeToolRef.current === 'delete-item' && deleteHoverRef.current !== null) {
+        const cmd = commandsRef.current[deleteHoverRef.current];
+        if (cmd) {
+          let hsx: number | null = null, hsy: number | null = null;
+          if (cmd.kind === 'Line') {
+            const mx = (cmd.startPoint[0] + cmd.endPoint[0]) / 2;
+            const my = (cmd.startPoint[1] + cmd.endPoint[1]) / 2;
+            [hsx, hsy] = worldToScreen(mx, my, cameraRef.current);
+          } else if (cmd.kind === 'Dot') {
+            [hsx, hsy] = worldToScreen(cmd.point[0], cmd.point[1], cameraRef.current);
+          }
+          if (hsx !== null && hsy !== null) {
+            ctx.save();
+            ctx.beginPath();
+            ctx.arc(hsx, hsy, 8, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(239, 68, 68, 0.2)';
+            ctx.fill();
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            // X mark
+            const s = 4;
+            ctx.beginPath();
+            ctx.moveTo(hsx - s, hsy - s); ctx.lineTo(hsx + s, hsy + s);
+            ctx.moveTo(hsx + s, hsy - s); ctx.lineTo(hsx - s, hsy + s);
+            ctx.strokeStyle = '#ef4444';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.restore();
+          }
+        }
+      }
     };
     requestAnimationFrame(drawRef.current);
-  }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds]);
+  }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, lineThicknesses, dotSizes]);
 
   // Fit to view only when the selected pattern or file changes — not on every edit
   const fittedRef = useRef(false);
@@ -973,8 +1099,9 @@ export default function Canvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && activeToolRef.current) {
         if (activeToolRef.current === 'area-fill') clearAreaFill();
-        splitHoverRef.current = null;
-        joinHoverRef.current = null;
+        splitHoverRef.current  = null;
+        joinHoverRef.current   = null;
+        deleteHoverRef.current = null;
         setActiveTool(null);
         requestAnimationFrame(drawRef.current);
         return;
@@ -1414,6 +1541,19 @@ export default function Canvas() {
           return;
         }
 
+        // ── Delete-item click ─────────────────────────────────────────────
+        if (activeToolRef.current === 'delete-item') {
+          const hitIdx = hitTest(sx, sy, commandsRef.current, cameraRef.current);
+          if (hitIdx !== null) {
+            const cmd = commandsRef.current[hitIdx];
+            if (cmd?.id) {
+              deleteHoverRef.current = null;
+              deleteCommand(cmd.id);
+            }
+          }
+          return;
+        }
+
         // ── Placement mode ────────────────────────────────────────────────
         if (activeToolRef.current) {
           const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
@@ -1422,7 +1562,7 @@ export default function Canvas() {
           if (activeToolRef.current === 'new-dot') {
             const newCmd: DotCommand = {
               kind: 'Dot', id: genId(),
-              valve: 1, point: [wx, wy, 0],
+              valve: activeParamRef.current, point: [wx, wy, 0],
               disabled: false, valveState: 'ValveOn',
             };
             insertAfterSelection(newCmd, 'Create dot');
@@ -1437,7 +1577,7 @@ export default function Canvas() {
             } else if (phase === 'line-end' && placementLineStartRef.current) {
               const newCmd: LineCommand = {
                 kind: 'Line', id: genId(),
-                valve: 1,
+                valve: activeParamRef.current,
                 startPoint: placementLineStartRef.current,
                 endPoint: [wx, wy, 0],
                 disabled: false,
@@ -1454,7 +1594,7 @@ export default function Canvas() {
         if (selectedCommandIds.size > 0) {
           const expandedIds = expandSelectedIds(commands, selectedCommandIds);
           if (expandedIds.size > 0) {
-            const handles = computeHandles(commands, expandedIds);
+            const handles = computeHandles(commands, expandedIds, cameraRef.current, lineThicknesses, dotSizes);
             const hitHandle = hitTestHandle(sx, sy, handles, cameraRef.current);
             if (hitHandle) {
               startHandleDrag(hitHandle, sx, sy);
@@ -1491,7 +1631,8 @@ export default function Canvas() {
       imgEl, startHandleDrag, startCalibScaleDrag,
       insertAfterSelection, setActiveTool, placementPhase,
       setAreaFillPolygon, startPolyDrag,
-      splitLine, joinLines,
+      splitLine, joinLines, deleteCommand,
+      lineThicknesses, dotSizes,
     ],
   );
 
@@ -1564,7 +1705,7 @@ export default function Canvas() {
         if (selIds.size >= 2) {
           const cmds = commandsRef.current;
           const expIds = expandSelectedIds(cmds, selIds);
-          const handles = computeHandles(cmds, expIds);
+          const handles = computeHandles(cmds, expIds, cameraRef.current, lineThicknessesRef.current, dotSizesRef.current);
           const junctionHandles = handles.filter((h) => h.role === 'junction');
           const hit = hitTestHandle(sx, sy, junctionHandles, cameraRef.current);
           joinHoverRef.current = hit ? { handle: hit } : null;
@@ -1577,12 +1718,21 @@ export default function Canvas() {
         return;
       }
 
+      // ── Delete-item hover ────────────────────────────────────────────────
+      if (activeToolRef.current === 'delete-item') {
+        const hitIdx = hitTest(sx, sy, commandsRef.current, cameraRef.current);
+        deleteHoverRef.current = hitIdx;
+        if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+        requestAnimationFrame(drawRef.current);
+        return;
+      }
+
       // Change cursor when hovering over a handle
       if (!isDraggingRef.current && !isCalibrating && selectedCommandIdsRef.current.size > 0) {
         const cmds = commandsRef.current;
         const expIds = expandSelectedIds(cmds, selectedCommandIdsRef.current);
         if (expIds.size > 0) {
-          const handles = computeHandles(cmds, expIds);
+          const handles = computeHandles(cmds, expIds, cameraRef.current, lineThicknessesRef.current, dotSizesRef.current);
           const onHandle = hitTestHandle(sx, sy, handles, cameraRef.current) !== null;
           if (canvasRef.current) {
             canvasRef.current.style.cursor = onHandle ? 'grab' : 'crosshair';
@@ -1777,6 +1927,10 @@ export default function Canvas() {
           hasImage={Boolean(imgEl)}
           imageVisible={bgImageVisible}
           onToggleImage={() => setBgImageVisible((v) => !v)}
+          lineThicknesses={lineThicknesses}
+          dotSizes={dotSizes}
+          onLineThicknessChange={setLineThickness}
+          onDotSizeChange={setDotSize}
         />
       )}
 

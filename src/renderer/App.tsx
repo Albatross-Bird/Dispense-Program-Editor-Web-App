@@ -141,38 +141,261 @@ function HistoryToggleIcon() {
   );
 }
 
+// ── New Subpattern Dialog ─────────────────────────────────────────────────────
+
+function NewSubpatternDialog({
+  patterns,
+  onConfirm,
+  onCancel,
+}: {
+  patterns: Pattern[];
+  onConfirm: (name: string, copyFrom: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [name, setName] = useState('');
+  const [copyFrom, setCopyFrom] = useState('__empty__');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const existingNames = useMemo(() => new Set(patterns.map((p) => p.name)), [patterns]);
+  const nameError = !name.trim()
+    ? 'Name cannot be empty'
+    : existingNames.has(name.trim())
+    ? 'A subpattern with this name already exists'
+    : null;
+
+  const handleConfirm = () => {
+    if (nameError) return;
+    onConfirm(name.trim(), copyFrom === '__empty__' ? null : copyFrom);
+  };
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onCancel(); e.stopPropagation(); }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-72">
+        <h3 className="text-sm font-semibold text-gray-100 mb-4">New Subpattern</h3>
+
+        <div className="mb-3">
+          <label className="block text-xs text-gray-400 mb-1">Name</label>
+          <input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleConfirm(); e.stopPropagation(); }}
+            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+            placeholder="e.g. Pattern1"
+          />
+          {nameError && <p className="text-xs text-red-400 mt-1">{nameError}</p>}
+        </div>
+
+        <div className="mb-5">
+          <label className="block text-xs text-gray-400 mb-1">Copy from</label>
+          <select
+            value={copyFrom}
+            onChange={(e) => setCopyFrom(e.target.value)}
+            className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+          >
+            <option value="__empty__">Empty</option>
+            {patterns.map((p) => (
+              <option key={p.name} value={p.name}>{p.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleConfirm}
+            disabled={Boolean(nameError)}
+            className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-default text-white rounded"
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Delete Subpattern Dialog ──────────────────────────────────────────────────
+
+function DeleteSubpatternDialog({
+  name,
+  onConfirm,
+  onCancel,
+}: {
+  name: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { onCancel(); e.stopPropagation(); }
+      if (e.key === 'Enter')  { onConfirm(); e.stopPropagation(); }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [onConfirm, onCancel]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+      <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-72">
+        <h3 className="text-sm font-semibold text-gray-100 mb-3">Delete Subpattern</h3>
+        <p className="text-sm text-gray-300 mb-5">
+          Delete subpattern{' '}
+          <span className="text-white font-mono font-semibold">'{name}'</span>
+          {' '}and all its commands?
+        </p>
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onCancel}
+            className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={onConfirm}
+            className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded"
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Pattern Selector ──────────────────────────────────────────────────────────
+
 function PatternSelector() {
-  const { program, selectedPatternName, selectPattern } = useProgramStore();
+  const { program, selectedPatternName, selectPattern,
+          createSubpattern, deleteSubpattern } = useProgramStore();
   const historyPanelOpen    = useUIStore((s) => s.historyPanelOpen);
   const setHistoryPanelOpen = useUIStore((s) => s.setHistoryPanelOpen);
 
+  const [showNewDialog, setShowNewDialog]       = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [dropdownOpen, setDropdownOpen]         = useState(false);
+  const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Close the mini dropdown on outside click
+  useEffect(() => {
+    if (!dropdownOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
+        setDropdownOpen(false);
+      }
+    };
+    window.addEventListener('mousedown', handler, true);
+    return () => window.removeEventListener('mousedown', handler, true);
+  }, [dropdownOpen]);
+
   if (!program) return <div className="px-3 py-2 text-xs text-gray-500 shrink-0">No file open</div>;
 
+  const canDelete = selectedPatternName !== null;
+
   return (
-    <div className="flex items-center gap-1 px-2 py-1.5 border-b border-gray-700 shrink-0">
-      <select
-        value={selectedPatternName ?? '__main__'}
-        onChange={(e) => selectPattern(e.target.value === '__main__' ? null : e.target.value)}
-        className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
-      >
-        <option value="__main__">Main</option>
-        {program.patterns.map((p) => (
-          <option key={p.name} value={p.name}>{p.name}</option>
-        ))}
-      </select>
-      <button
-        onClick={() => setHistoryPanelOpen(!historyPanelOpen)}
-        title="Toggle history panel"
-        className={[
-          'shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors',
-          historyPanelOpen
-            ? 'bg-amber-600/30 text-amber-300 border border-amber-500/50'
-            : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200 border border-transparent',
-        ].join(' ')}
-      >
-        <HistoryToggleIcon />
-      </button>
-    </div>
+    <>
+      <div className="flex items-center gap-1 px-2 py-1.5 border-b border-gray-700 shrink-0">
+        {/* Split [+|▾] button */}
+        <div className="flex items-center shrink-0">
+          {/* + part: open New dialog directly */}
+          <button
+            onClick={() => { setDropdownOpen(false); setShowNewDialog(true); }}
+            title="New subpattern"
+            className="flex items-center justify-center w-6 h-7 rounded-l bg-gray-700 hover:bg-gray-600 border border-gray-600 border-r-0 text-gray-200 text-base leading-none"
+          >
+            +
+          </button>
+          {/* ▾ part: open mini dropdown */}
+          <div ref={dropdownRef} className="relative">
+            <button
+              onClick={() => setDropdownOpen((v) => !v)}
+              className="flex items-center justify-center w-[14px] h-7 rounded-r bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-400 text-[9px]"
+            >
+              ▾
+            </button>
+            {dropdownOpen && (
+              <div className="absolute left-0 top-full mt-0.5 bg-gray-900 border border-gray-700 rounded shadow-xl py-0.5 z-50 whitespace-nowrap min-w-[190px]">
+                <button
+                  onClick={() => { setDropdownOpen(false); setShowNewDialog(true); }}
+                  className="flex items-center w-full px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-700/60 text-left"
+                >
+                  New Subpattern
+                </button>
+                <button
+                  onClick={() => {
+                    if (!canDelete) return;
+                    setDropdownOpen(false);
+                    setShowDeleteDialog(true);
+                  }}
+                  disabled={!canDelete}
+                  title={!canDelete ? 'Cannot delete Main block' : undefined}
+                  className="flex items-center w-full px-3 py-1.5 text-xs text-red-400 hover:bg-gray-700/60 disabled:opacity-40 disabled:cursor-default text-left"
+                >
+                  Delete Current Subpattern
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Pattern dropdown */}
+        <select
+          value={selectedPatternName ?? '__main__'}
+          onChange={(e) => selectPattern(e.target.value === '__main__' ? null : e.target.value)}
+          className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        >
+          <option value="__main__">Main</option>
+          {program.patterns.map((p) => (
+            <option key={p.name} value={p.name}>{p.name}</option>
+          ))}
+        </select>
+
+        {/* History toggle */}
+        <button
+          onClick={() => setHistoryPanelOpen(!historyPanelOpen)}
+          title="Toggle history panel"
+          className={[
+            'shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors',
+            historyPanelOpen
+              ? 'bg-amber-600/30 text-amber-300 border border-amber-500/50'
+              : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200 border border-transparent',
+          ].join(' ')}
+        >
+          <HistoryToggleIcon />
+        </button>
+      </div>
+
+      {showNewDialog && (
+        <NewSubpatternDialog
+          patterns={program.patterns}
+          onConfirm={(name, copyFrom) => { createSubpattern(name, copyFrom); setShowNewDialog(false); }}
+          onCancel={() => setShowNewDialog(false)}
+        />
+      )}
+
+      {showDeleteDialog && selectedPatternName !== null && (
+        <DeleteSubpatternDialog
+          name={selectedPatternName}
+          onConfirm={() => { deleteSubpattern(selectedPatternName); setShowDeleteDialog(false); }}
+          onCancel={() => setShowDeleteDialog(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -219,6 +442,7 @@ function CommandPane() {
     program, selectedPatternName,
     selectedCommandIds, lastSelectedId,
     selectOne, selectToggle, selectRange, clearSelection,
+    reorderCommands,
   } = useProgramStore();
   const { showMenu } = useCommandContextMenu();
 
@@ -249,6 +473,7 @@ function CommandPane() {
         else selectOne(id);
       }}
       onClear={clearSelection}
+      onReorder={reorderCommands}
       onContextMenu={(e, cmdId) => {
         e.preventDefault();
         // Select the row first if not already in selection

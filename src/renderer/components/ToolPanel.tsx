@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useProgramStore } from '../store/program-store';
 import { useUIStore } from '../store/ui-store';
 import AreaFillPanel, { useAnchorRect } from './AreaFillPanel';
+import { valveColor } from './visualization/renderers';
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────────
 
@@ -78,6 +79,18 @@ function SplitLineIcon() {
   );
 }
 
+function TrashIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="2,5 15,5" />
+      <path d="M6 5V3.5Q6 3 6.5 3L10.5 3Q11 3 11 3.5V5" />
+      <path d="M4 5L4.8 14Q4.9 14.5 5.5 14.5L11.5 14.5Q12.1 14.5 12.2 14L13 5" />
+      <line x1="7" y1="8" x2="7" y2="12" />
+      <line x1="10" y1="8" x2="10" y2="12" />
+    </svg>
+  );
+}
+
 function JoinLinesIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
@@ -120,6 +133,66 @@ function UngroupIcon() {
       <line x1="9.5" y1="9.5" x2="12.5" y2="12.5" />
       <line x1="12.5" y1="9.5" x2="9.5" y2="12.5" />
     </svg>
+  );
+}
+
+// ── Param Selector ─────────────────────────────────────────────────────────────
+
+interface ParamSelectorProps {
+  activeParam: number;
+  setActiveParam: (n: number) => void;
+}
+
+function ParamSelector({ activeParam, setActiveParam }: ParamSelectorProps) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener('mousedown', handler, true);
+    return () => window.removeEventListener('mousedown', handler, true);
+  }, [open]);
+
+  const color = valveColor(activeParam);
+
+  return (
+    <div
+      ref={containerRef}
+      className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50"
+    >
+      <button
+        onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap transition-opacity"
+        style={{
+          color,
+          background: 'rgba(15,20,30,0.92)',
+          border: `1px solid ${color}55`,
+          boxShadow: `0 0 6px ${color}33`,
+        }}
+      >
+        P{activeParam}
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-gray-700 rounded shadow-2xl py-0.5 min-w-[90px]">
+          {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
+            <button
+              key={n}
+              onClick={(e) => { e.stopPropagation(); setActiveParam(n); setOpen(false); }}
+              className={`flex items-center gap-2 w-full px-2 py-[3px] text-xs text-left transition-colors ${n === activeParam ? 'bg-gray-700/60' : 'hover:bg-gray-700/40'}`}
+            >
+              <span
+                className="w-2.5 h-2.5 rounded-full shrink-0"
+                style={{ background: valveColor(n) }}
+              />
+              <span style={{ color: valveColor(n) }}>Param {n}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -229,12 +302,15 @@ export default function ToolPanel() {
   const disconnectLines     = useProgramStore((s) => s.disconnectLines);
   const groupSelection      = useProgramStore((s) => s.groupSelection);
   const ungroupSelection    = useProgramStore((s) => s.ungroupSelection);
+  const deleteSelection     = useProgramStore((s) => s.deleteSelection);
 
   const activeTool             = useUIStore((s) => s.activeTool);
   // split-line and join-lines are canvas-driven; toolbar just activates them
   const setActiveTool          = useUIStore((s) => s.setActiveTool);
   const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
   const setAreaFillEditGroupId = useUIStore((s) => s.setAreaFillEditGroupId);
+  const activeParam            = useUIStore((s) => s.activeParam);
+  const setActiveParam         = useUIStore((s) => s.setActiveParam);
 
   const toolPanelRef = useRef<HTMLDivElement>(null);
   const anchorRect   = useAnchorRect(toolPanelRef as React.RefObject<HTMLElement>);
@@ -288,7 +364,7 @@ export default function ToolPanel() {
       };
     }, [canEdit, program, selectedPatternName, selectedCommandIds]);
 
-  const canMerge      = canEdit && selectedLineCount === 2;
+  const canMerge      = canEdit && selectedLineCount >= 2;
   const canDisconnect = canEdit && hasConnectedPair;
   const canGroup      = canEdit && selectedCommandIds.size > 0;
   const canUngroup    = canEdit && hasSelectedGroup;
@@ -298,7 +374,7 @@ export default function ToolPanel() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines') => {
+  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item') => {
     if (activeTool === tool) {
       setActiveTool(null);
       if (tool === 'area-fill') clearAreaFill();
@@ -334,20 +410,30 @@ export default function ToolPanel() {
       className="flex flex-col items-center py-1 bg-gray-750 border-x border-gray-700 shrink-0 overflow-visible"
       style={{ width: 40, background: '#1e2433' }}
     >
-      <ToolButton
-        icon={<NewLineIcon />}
-        label="New Line (click 2 points)"
-        active={activeTool === 'new-line'}
-        disabled={!canEdit}
-        onClick={() => toggleTool('new-line')}
-      />
-      <ToolButton
-        icon={<NewDotIcon />}
-        label="New Dot (click to place)"
-        active={activeTool === 'new-dot'}
-        disabled={!canEdit}
-        onClick={() => toggleTool('new-dot')}
-      />
+      <div className="relative">
+        <ToolButton
+          icon={<NewLineIcon />}
+          label="New Line (click 2 points)"
+          active={activeTool === 'new-line'}
+          disabled={!canEdit}
+          onClick={() => toggleTool('new-line')}
+        />
+        {activeTool === 'new-line' && (
+          <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+        )}
+      </div>
+      <div className="relative">
+        <ToolButton
+          icon={<NewDotIcon />}
+          label="New Dot (click to place)"
+          active={activeTool === 'new-dot'}
+          disabled={!canEdit}
+          onClick={() => toggleTool('new-dot')}
+        />
+        {activeTool === 'new-dot' && (
+          <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+        )}
+      </div>
 
       <Divider />
 
@@ -417,6 +503,27 @@ export default function ToolPanel() {
         label="Ungroup"
         disabled={!canUngroup}
         onClick={ungroupSelection}
+      />
+
+      <Divider />
+
+      {/* Delete: Mode 1 (immediate) if selection exists; Mode 2 (click-to-delete) otherwise */}
+      <ToolButton
+        icon={<TrashIcon />}
+        label={
+          selectedCommandIds.size > 0
+            ? `Delete ${selectedCommandIds.size} selected`
+            : 'Delete tool — click commands to delete'
+        }
+        active={activeTool === 'delete-item'}
+        disabled={!canEdit}
+        onClick={() => {
+          if (selectedCommandIds.size > 0) {
+            deleteSelection();
+          } else {
+            toggleTool('delete-item');
+          }
+        }}
       />
 
       {activeTool === 'area-fill' && anchorRect && (

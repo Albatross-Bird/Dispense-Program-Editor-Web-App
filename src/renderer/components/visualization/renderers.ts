@@ -49,6 +49,15 @@ function parsePointsFromRaw(raw: string): [number, number][] {
   return pts;
 }
 
+// ── Render config (thickness / dot size per param) ────────────────────────────
+
+export interface RenderConfig {
+  /** Line stroke widths in mm, indexed by param-1 (0..9). */
+  lineThicknesses: number[];
+  /** Dot diameters in mm, indexed by param-1 (0..9). */
+  dotSizes: number[];
+}
+
 // ── Per-type drawers ──────────────────────────────────────────────────────────
 
 export function drawLine(
@@ -57,6 +66,8 @@ export function drawLine(
   cam: Camera,
   selected: boolean,
   suppressStartDot = false,
+  lineWidthPx?: number,
+  suppressStartSquare = false,
 ) {
   const color = valveColor(cmd.valve);
   const [x1, y1] = worldToScreen(cmd.startPoint[0], cmd.startPoint[1], cam);
@@ -64,21 +75,60 @@ export function drawLine(
 
   ctx.save();
 
+  const basePx = lineWidthPx ?? 1.5;
+
+  // Scale arrowhead and start-dot relative to the line width.
+  const arrowSize = Math.max(4, basePx * 3.5);
+  const dotRadius = Math.max(1.5, basePx * 1.2);
+
+  // Shorten the stroke so it ends at the arrowhead base rather than the tip,
+  // preventing the square line cap from showing through the arrow triangle.
+  const angle      = Math.atan2(y2 - y1, x2 - x1);
+  const arrowDepth = arrowSize * Math.cos(Math.PI / 6); // height of the arrow triangle
+  const ex = x2 - arrowDepth * Math.cos(angle);
+  const ey = y2 - arrowDepth * Math.sin(angle);
+
   ctx.strokeStyle = selected ? '#ffffff' : color;
-  ctx.lineWidth = selected ? 3 : 1.5;
+  ctx.lineWidth = basePx;
   ctx.beginPath();
   ctx.moveTo(x1, y1);
-  ctx.lineTo(x2, y2);
+  ctx.lineTo(ex, ey);
   ctx.stroke();
 
-  ctx.fillStyle = selected ? '#ffffff' : color;
-  const arrowSize = Math.max(5, Math.min(10, cam.zoom * 1.5));
-  arrowhead(ctx, x1, y1, x2, y2, arrowSize);
-
-  // Start dot — omitted when a previous line already ends at this point
-  if (!suppressStartDot) {
+  // Arrowhead — selected: background fill + white outline so interior appears
+  // transparent and the line body is hidden underneath. Unselected: solid fill.
+  if (selected) {
     ctx.beginPath();
-    ctx.arc(x1, y1, 2, 0, Math.PI * 2);
+    ctx.moveTo(x2, y2);
+    ctx.lineTo(x2 - arrowSize * Math.cos(angle - Math.PI / 6), y2 - arrowSize * Math.sin(angle - Math.PI / 6));
+    ctx.lineTo(x2 - arrowSize * Math.cos(angle + Math.PI / 6), y2 - arrowSize * Math.sin(angle + Math.PI / 6));
+    ctx.closePath();
+    ctx.fillStyle = '#374151';
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  } else {
+    ctx.fillStyle = color;
+    arrowhead(ctx, x1, y1, x2, y2, arrowSize);
+  }
+
+  // Start handle:
+  //  - Selected + not a selected junction → square (draggable endpoint)
+  //  - Selected + selected junction (both sides selected) → suppress; diamond drawn by drawHandles
+  //  - Unselected + not a connected start → dot
+  //  - Unselected + connected start → suppress dot
+  if (selected && !suppressStartSquare) {
+    const half = dotRadius; // side = dotRadius * 2 == unselected circle diameter
+    ctx.fillStyle = '#374151'; // matches canvas background fill in renderFrame
+    ctx.fillRect(x1 - half, y1 - half, half * 2, half * 2);
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.strokeRect(x1 - half, y1 - half, half * 2, half * 2);
+  } else if (!selected && !suppressStartDot) {
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.arc(x1, y1, dotRadius, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -90,11 +140,11 @@ export function drawDot(
   cmd: DotCommand,
   cam: Camera,
   selected: boolean,
+  dotRadiusPx?: number,
 ) {
   const color = valveColor(cmd.valve);
   const [sx, sy] = worldToScreen(cmd.point[0], cmd.point[1], cam);
-  // World-space radius of 1 unit — scales with zoom exactly like line geometry.
-  const r = cam.zoom * 1.0;
+  const r = dotRadiusPx ?? cam.zoom * 1.0;
 
   ctx.save();
 
@@ -161,9 +211,15 @@ export function drawLaser(
 }
 
 /**
- * Pre-compute the set of start-point keys where a previous consecutive Line
- * ends at the same coordinate. These start dots should be suppressed.
- * Non-Line commands (Comments, Marks, etc.) break the chain.
+ * Pre-compute the set of start-point keys where a previous Line ends at the
+ * same coordinate. These start dots should be suppressed.
+ *
+ * Non-Line, non-Group commands (Dots, Marks, Comments, Raw, Laser) are
+ * skipped without breaking the chain. This matches the behaviour of
+ * computeSelectedJunctionStarts and means a Dot or Mark placed between two
+ * coordinate-connected Lines does not cause the second Line's start dot to
+ * reappear. Only a Line whose startPoint doesn't match the previous Line's
+ * endPoint resets the chain.
  */
 export function computeConnectedStarts(commands: PatternCommand[]): Set<string> {
   const connected = new Set<string>();
@@ -180,10 +236,9 @@ export function computeConnectedStarts(commands: PatternCommand[]): Set<string> 
         prevEndKey = ptKey(cmd.endPoint);
       } else if (cmd.kind === 'Group') {
         prevEndKey = visit(cmd.commands, prevEndKey);
-      } else {
-        // Comments, Marks, Dots, Raw, etc. break the line chain
-        prevEndKey = null;
       }
+      // All other kinds (Dot, Mark, Laser, Comment, Raw) are ignored —
+      // they do not reset prevEndKey so they cannot break a connected chain.
     }
     return prevEndKey;
   }
@@ -193,10 +248,53 @@ export function computeConnectedStarts(commands: PatternCommand[]): Set<string> 
 }
 
 /**
+ * Pre-compute start-point keys that are "selected junctions": the preceding
+ * selected Line ends at exactly this coordinate, so the junction diamond is
+ * shown by drawHandles instead of the start square.
+ *
+ * Mirrors the `startIsJunction` logic in computeHandles (handles.ts) by
+ * flattening selected Lines in depth-first document order and checking
+ * consecutive connected pairs — the two systems must always agree.
+ */
+export function computeSelectedJunctionStarts(
+  commands: PatternCommand[],
+  selectedIds: Set<string>,
+): Set<string> {
+  const junctions = new Set<string>();
+
+  function ptKey(p: readonly [number, number, number] | number[]): string {
+    return `${(p[0] as number).toFixed(3)},${(p[1] as number).toFixed(3)},${(p[2] as number).toFixed(3)}`;
+  }
+
+  const selectedLines: LineCommand[] = [];
+  function flatten(cmds: PatternCommand[]): void {
+    for (const cmd of cmds) {
+      if (cmd.kind === 'Group') flatten(cmd.commands);
+      else if (cmd.kind === 'Line' && cmd.id && selectedIds.has(cmd.id))
+        selectedLines.push(cmd);
+    }
+  }
+  flatten(commands);
+
+  for (let i = 1; i < selectedLines.length; i++) {
+    const prev = selectedLines[i - 1];
+    const curr = selectedLines[i];
+    if (ptKey(prev.endPoint as [number, number, number]) ===
+        ptKey(curr.startPoint as [number, number, number])) {
+      junctions.add(ptKey(curr.startPoint as [number, number, number]));
+    }
+  }
+
+  return junctions;
+}
+
+/**
  * Dispatch draw for any command type.
  * `selectedIds` is the set of selected command IDs (pre-expanded for groups).
  * `hiddenValves` is the set of valve numbers whose Line/Dot commands should be skipped.
  * `connectedStarts` is the pre-computed set of start-point keys with suppressed dots.
+ * `selectedJunctionStarts` is the set of start-point keys where both the preceding
+ *   and this selected Line connect — suppresses the start square in favour of the diamond.
  * Comment and Raw produce no canvas output.
  */
 export function drawCommand(
@@ -206,6 +304,8 @@ export function drawCommand(
   selectedIds: Set<string>,
   hiddenValves: Set<number> = new Set(),
   connectedStarts: Set<string> = new Set(),
+  renderConfig?: RenderConfig,
+  selectedJunctionStarts: Set<string> = new Set(),
 ) {
   const isSelected = Boolean(cmd.id && selectedIds.has(cmd.id));
 
@@ -213,17 +313,22 @@ export function drawCommand(
     case 'Line': {
       if (!hiddenValves.has(cmd.valve)) {
         const sk = `${cmd.startPoint[0].toFixed(3)},${cmd.startPoint[1].toFixed(3)},${cmd.startPoint[2].toFixed(3)}`;
-        drawLine(ctx, cmd, cam, isSelected, connectedStarts.has(sk));
+        const thickMm = renderConfig?.lineThicknesses[cmd.valve - 1] ?? 0.5;
+        drawLine(ctx, cmd, cam, isSelected, connectedStarts.has(sk), thickMm * cam.zoom, selectedJunctionStarts.has(sk));
       }
       break;
     }
-    case 'Dot':
-      if (!hiddenValves.has(cmd.valve)) drawDot(ctx, cmd, cam, isSelected);
+    case 'Dot': {
+      if (!hiddenValves.has(cmd.valve)) {
+        const diamMm = renderConfig?.dotSizes[cmd.valve - 1] ?? 1.0;
+        drawDot(ctx, cmd, cam, isSelected, (diamMm / 2) * cam.zoom);
+      }
       break;
+    }
     case 'Mark':  drawMark(ctx, cmd, cam, isSelected);  break;
     case 'Laser': drawLaser(ctx, cmd, cam, isSelected); break;
     case 'Group':
-      for (const child of cmd.commands) drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts);
+      for (const child of cmd.commands) drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts);
       break;
     case 'Comment':
     case 'Raw':

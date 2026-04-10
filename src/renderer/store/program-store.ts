@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Program, PatternCommand, LineCommand, GroupNode } from '@lib/types';
+import type { Program, Pattern, PatternCommand, LineCommand, GroupNode } from '@lib/types';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
 import { MYD_DEFAULT } from '@lib/syntax-profiles';
@@ -136,6 +136,16 @@ interface ProgramStore {
   splitLine: (cmdId: string, splitPoint: [number, number, number]) => void;
   /** Join an ordered list of connected Line commands into one. */
   joinLines: (cmdIds: string[]) => void;
+
+  // ── Subpattern management ─────────────────────────────────────────────────
+  createSubpattern: (name: string, copyFromName: string | null) => void;
+  deleteSubpattern: (name: string) => void;
+
+  // ── Reorder / Delete ─────────────────────────────────────────────────────
+  /** Move a set of commands to a new position in the AST. */
+  reorderCommands: (draggedIds: string[], insertBeforeId: string | null, targetGroupId: string | null) => void;
+  /** Delete a single command by ID (does not require it to be selected). */
+  deleteCommand: (id: string) => void;
 
   // ── Clipboard ────────────────────────────────────────────────────────────
   clipboard: PatternCommand[] | null;
@@ -362,19 +372,26 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     if (!pattern) return;
 
     const lines = collectSelectedLines(pattern.commands, selectedCommandIds);
-    if (lines.length !== 2 || !lines[0].id) return;
-    const [first, second] = lines;
+    if (lines.length < 2) return;
 
     const newCmds = cloneCmds(pattern.commands);
-    const clone = findById(newCmds, first.id!) as LineCommand;
-    if (!clone || clone.kind !== 'Line') return;
-    clone.endPoint = [second.startPoint[0], second.startPoint[1], second.startPoint[2]];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (clone as any)._raw = undefined;
+    let count = 0;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const a = lines[i];
+      const b = lines[i + 1];
+      if (!a.id) continue;
+      const clone = findById(newCmds, a.id) as LineCommand;
+      if (!clone || clone.kind !== 'Line') continue;
+      clone.endPoint = [b.startPoint[0], b.startPoint[1], b.startPoint[2]];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (clone as any)._raw = undefined;
+      count++;
+    }
+    if (count === 0) return;
 
     get().setProgram(
       { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
-      'Merge End→Start',
+      `Merge Forward ${count} pair${count !== 1 ? 's' : ''}`,
     );
   },
 
@@ -385,19 +402,26 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     if (!pattern) return;
 
     const lines = collectSelectedLines(pattern.commands, selectedCommandIds);
-    if (lines.length !== 2 || !lines[1].id) return;
-    const [first, second] = lines;
+    if (lines.length < 2) return;
 
     const newCmds = cloneCmds(pattern.commands);
-    const clone = findById(newCmds, second.id!) as LineCommand;
-    if (!clone || clone.kind !== 'Line') return;
-    clone.startPoint = [first.endPoint[0], first.endPoint[1], first.endPoint[2]];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (clone as any)._raw = undefined;
+    let count = 0;
+    for (let i = 0; i < lines.length - 1; i++) {
+      const a = lines[i];
+      const b = lines[i + 1];
+      if (!b.id) continue;
+      const clone = findById(newCmds, b.id) as LineCommand;
+      if (!clone || clone.kind !== 'Line') continue;
+      clone.startPoint = [a.endPoint[0], a.endPoint[1], a.endPoint[2]];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (clone as any)._raw = undefined;
+      count++;
+    }
+    if (count === 0) return;
 
     get().setProgram(
       { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
-      'Merge Start←End',
+      `Merge Backward ${count} pair${count !== 1 ? 's' : ''}`,
     );
   },
 
@@ -411,7 +435,7 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     if (lines.length < 2) return;
 
     const newCmds = cloneCmds(pattern.commands);
-    let modified = false;
+    let junctions = 0;
 
     for (let i = 0; i < lines.length - 1; i++) {
       const a = lines[i];
@@ -423,15 +447,15 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
           clone.endPoint = [clone.endPoint[0] + 0.001, clone.endPoint[1], clone.endPoint[2]];
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           (clone as any)._raw = undefined;
-          modified = true;
+          junctions++;
         }
       }
     }
 
-    if (!modified) return;
+    if (junctions === 0) return;
     get().setProgram(
       { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
-      'Disconnect lines',
+      `Disconnect ${junctions} junction${junctions !== 1 ? 's' : ''}`,
     );
   },
 
@@ -640,6 +664,113 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: merged.id ? new Set([merged.id]) : new Set<string>(),
       lastSelectedId: merged.id ?? null,
+    });
+  },
+
+  createSubpattern: (name: string, copyFromName: string | null) => {
+    const { program, historyEntries, historyCurrentIndex } = get();
+    if (!program) return;
+    let commands: PatternCommand[] = [];
+    if (copyFromName !== null) {
+      const src = program.patterns.find((p) => p.name === copyFromName);
+      if (src) commands = reIdCommands(cloneCmds(src.commands));
+    }
+    const newPattern: Pattern = { name, commands };
+    const newProgram = { ...program, patterns: [...program.patterns, newPattern] };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Create subpattern: ${name}`, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedPatternName: name,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
+    });
+  },
+
+  deleteSubpattern: (name: string) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program) return;
+    const newPatterns = program.patterns.filter((p) => p.name !== name);
+    const newProgram = { ...program, patterns: newPatterns };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Delete subpattern: ${name}`, newProgram);
+    const newSelected = selectedPatternName === name
+      ? (newPatterns[0]?.name ?? null)
+      : selectedPatternName;
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedPatternName: newSelected,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
+    });
+  },
+
+  reorderCommands: (draggedIds: string[], insertBeforeId: string | null, targetGroupId: string | null) => {
+    const { program, selectedPatternName } = get();
+    if (!program || !selectedPatternName || draggedIds.length === 0) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    const draggedSet = new Set(draggedIds);
+
+    function extractDragged(cmds: PatternCommand[]): PatternCommand[] {
+      const result: PatternCommand[] = [];
+      for (const c of cmds) {
+        if (c.id && draggedSet.has(c.id)) result.push(c);
+        else if (c.kind === 'Group') result.push(...extractDragged(c.commands));
+      }
+      return result;
+    }
+
+    function removeDragged(cmds: PatternCommand[]): PatternCommand[] {
+      return cmds
+        .filter((c) => !c.id || !draggedSet.has(c.id))
+        .map((c) => c.kind === 'Group' ? { ...c, commands: removeDragged(c.commands) } : c);
+    }
+
+    function insertBefore(cmds: PatternCommand[], toInsert: PatternCommand[], beforeId: string | null): PatternCommand[] {
+      if (beforeId === null) return [...cmds, ...toInsert];
+      const idx = cmds.findIndex((c) => c.id === beforeId);
+      if (idx === -1) return [...cmds, ...toInsert];
+      return [...cmds.slice(0, idx), ...toInsert, ...cmds.slice(idx)];
+    }
+
+    function insertInto(cmds: PatternCommand[], groupId: string | null, toInsert: PatternCommand[], beforeId: string | null): PatternCommand[] {
+      if (groupId === null) return insertBefore(cmds, toInsert, beforeId);
+      return cmds.map((c) => {
+        if (c.kind === 'Group' && c.id === groupId) {
+          return { ...c, commands: insertBefore(c.commands, toInsert, beforeId) };
+        }
+        if (c.kind === 'Group') {
+          return { ...c, commands: insertInto(c.commands, groupId, toInsert, beforeId) };
+        }
+        return c;
+      });
+    }
+
+    const dragged = extractDragged(pattern.commands);
+    if (dragged.length === 0) return;
+
+    const stripped = removeDragged(pattern.commands);
+    const reordered = insertInto(stripped, targetGroupId, dragged, insertBeforeId);
+    const n = dragged.length;
+
+    get().setProgram(
+      { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: reordered } : p) },
+      `Reorder ${n} command${n !== 1 ? 's' : ''}`,
+    );
+  },
+
+  deleteCommand: (id: string) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    const newCmds = removeSelected(pattern.commands, new Set([id]));
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, 'Delete command', newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set<string>(), lastSelectedId: null,
     });
   },
 

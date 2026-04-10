@@ -17,7 +17,7 @@ export interface BackgroundImage {
   dataUrl: string;
 }
 
-export type ActiveTool = 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | null;
+export type ActiveTool = 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item' | null;
 
 export interface ContextMenuItem {
   label?: string;
@@ -71,6 +71,10 @@ interface UIStore {
   contextMenu: ContextMenuState | null;
   showContextMenu: (state: ContextMenuState) => void;
   hideContextMenu: () => void;
+
+  /** The valve/param number (1–10) to assign to newly created Line/Dot commands. */
+  activeParam: number;
+  setActiveParam: (n: number) => void;
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -109,4 +113,7 @@ export const useUIStore = create<UIStore>((set, get) => ({
   contextMenu: null,
   showContextMenu: (state: ContextMenuState) => set({ contextMenu: state }),
   hideContextMenu: () => set({ contextMenu: null }),
+
+  activeParam: 1,
+  setActiveParam: (activeParam: number) => set({ activeParam }),
 }));

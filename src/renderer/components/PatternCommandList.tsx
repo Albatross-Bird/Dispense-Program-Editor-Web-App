@@ -2,6 +2,24 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { PatternCommand, LineCommand, GroupNode } from '@lib/types';
 import { serializePatternCommand } from '@lib/serializer';
 import { valveColor } from './visualization/renderers';
+import {
+  DndContext,
+  DragEndEvent,
+  DragOverEvent,
+  DragStartEvent,
+  DragOverlay,
+  closestCenter,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  UniqueIdentifier,
+} from '@dnd-kit/core';
+import {
+  SortableContext,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 // ── Chain detection helpers ───────────────────────────────────────────────────
 
@@ -118,6 +136,43 @@ function ChainConnector({ pos, color }: { pos: ChainPos; color: string }) {
   );
 }
 
+// ── Sortable row wrapper ───────────────────────────────────────────────────────
+
+function SortableRow({
+  id,
+  showTopIndicator,
+  showBottomIndicator,
+  children,
+}: {
+  id: string;
+  showTopIndicator: boolean;
+  showBottomIndicator: boolean;
+  children: React.ReactNode;
+}) {
+  const { listeners, setNodeRef, transform, transition, isDragging } =
+    useSortable({ id });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, position: 'relative' }}
+    >
+      {showTopIndicator && (
+        <div className="absolute top-0 left-0 right-0 h-0.5 bg-blue-400 z-20 pointer-events-none" />
+      )}
+      <div
+        {...listeners}
+        style={{ opacity: isDragging ? 0.25 : 1 }}
+      >
+        {children}
+      </div>
+      {showBottomIndicator && (
+        <div className="absolute bottom-0 left-0 right-0 h-0.5 bg-blue-400 z-20 pointer-events-none" />
+      )}
+    </div>
+  );
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtPt(p: [number, number, number]): string {
@@ -133,6 +188,7 @@ interface PatternCommandListProps {
   onSelect: (id: string, mode: SelectMode, allIds: string[]) => void;
   onClear: () => void;
   onContextMenu?: (e: React.MouseEvent, cmdId: string | undefined) => void;
+  onReorder?: (draggedIds: string[], insertBeforeId: string | null, targetGroupId: string | null) => void;
 }
 
 export default function PatternCommandList({
@@ -142,12 +198,21 @@ export default function PatternCommandList({
   onSelect,
   onClear,
   onContextMenu,
+  onReorder,
 }: PatternCommandListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [shiftHeld, setShiftHeld] = useState(false);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+
+  // ── DnD state ──────────────────────────────────────────────────────────────
+  const [dragActiveId, setDragActiveId] = useState<UniqueIdentifier | null>(null);
+  const [dragOverId, setDragOverId] = useState<UniqueIdentifier | null>(null);
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
+  );
 
   // Track shift key globally
   useEffect(() => {
@@ -162,6 +227,8 @@ export default function PatternCommandList({
     () => buildFlatItems(commands, collapsedGroups),
     [commands, collapsedGroups],
   );
+
+  const sortableIds = useMemo(() => items.map((it) => it.key), [items]);
 
   // All IDs in the current visible order (for range selection)
   const allVisibleIds = useMemo(
@@ -214,6 +281,76 @@ export default function PatternCommandList({
     [onSelect, allVisibleIds],
   );
 
+  // ── DnD handlers ───────────────────────────────────────────────────────────
+
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    setDragActiveId(event.active.id);
+  }, []);
+
+  const handleDragOver = useCallback((event: DragOverEvent) => {
+    setDragOverId(event.over?.id ?? null);
+  }, []);
+
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    setDragActiveId(null);
+    setDragOverId(null);
+
+    if (!over || active.id === over.id || !onReorder) return;
+
+    const activeIdx = items.findIndex((it) => it.key === String(active.id));
+    const overIdx   = items.findIndex((it) => it.key === String(over.id));
+    if (activeIdx === -1 || overIdx === -1) return;
+
+    const activeItem = items[activeIdx];
+    const overItem   = items[overIdx];
+    if (!activeItem.cmdId) return;
+
+    // Multi-select: move all selected items as a block
+    const isMulti = selectedCommandIds.has(activeItem.cmdId) && selectedCommandIds.size > 1;
+    const movedIds = isMulti
+      ? items.filter((it) => it.cmdId && selectedCommandIds.has(it.cmdId)).map((it) => it.cmdId as string)
+      : [activeItem.cmdId];
+
+    const movingDown = activeIdx < overIdx;
+
+    // Determine target container (group or top-level)
+    let targetGroupId: string | null = null;
+    if (overItem.depth === 1 && !overItem.isGroupHeader) {
+      // Find the parent group header by searching backward
+      for (let i = overIdx - 1; i >= 0; i--) {
+        if (items[i].isGroupHeader) { targetGroupId = items[i].cmdId ?? null; break; }
+      }
+    }
+
+    // Determine insertBeforeId based on drag direction
+    let insertBeforeId: string | null = null;
+    if (movingDown) {
+      // Insert AFTER overItem — find next sibling in the same container
+      for (let i = overIdx + 1; i < items.length; i++) {
+        const it = items[i];
+        if (targetGroupId !== null) {
+          if (it.depth === 0) break; // exited the group
+          insertBeforeId = it.cmdId ?? null;
+          break;
+        } else {
+          if (it.depth === 0) { insertBeforeId = it.cmdId ?? null; break; }
+        }
+      }
+      // insertBeforeId remains null → append to end of container
+    } else {
+      // Insert BEFORE overItem
+      insertBeforeId = overItem.cmdId ?? null;
+    }
+
+    onReorder(movedIds, insertBeforeId, targetGroupId);
+  }, [items, selectedCommandIds, onReorder]);
+
+  // Drop indicator positions
+  const dragActiveIdx = dragActiveId !== null ? items.findIndex((it) => it.key === String(dragActiveId)) : -1;
+  const dragOverIdx   = dragOverId   !== null ? items.findIndex((it) => it.key === String(dragOverId))   : -1;
+  const isDraggingDown = dragActiveIdx < dragOverIdx;
+
   if (commands.length === 0) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-500 text-sm">
@@ -223,233 +360,287 @@ export default function PatternCommandList({
   }
 
   return (
-    <div
-      ref={containerRef}
-      className="flex-1 overflow-auto py-1 select-none"
-      onClick={(e) => {
-        // Click on the pane background clears selection
-        if (e.target === e.currentTarget) onClear();
-      }}
+    <DndContext
+      sensors={sensors}
+      collisionDetection={closestCenter}
+      onDragStart={handleDragStart}
+      onDragOver={handleDragOver}
+      onDragEnd={handleDragEnd}
     >
-      {items.map((item) => {
-        const { cmdId } = item;
-        const isSelected = Boolean(cmdId && selectedCommandIds.has(cmdId));
-        const isPreview = Boolean(cmdId && previewIds.has(cmdId));
-        const indent = item.depth * 16;
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        <div
+          ref={containerRef}
+          className="flex-1 overflow-auto py-1 select-none"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClear();
+          }}
+        >
+          {items.map((item, idx) => {
+            const { cmdId } = item;
+            const isSelected = Boolean(cmdId && selectedCommandIds.has(cmdId));
+            const isPreview = Boolean(cmdId && previewIds.has(cmdId));
+            const indent = item.depth * 16;
 
-        const rowBg = isSelected
-          ? 'bg-blue-600/40'
-          : isPreview
-          ? 'bg-blue-500/15'
-          : 'hover:bg-gray-700/50';
+            const showTopIndicator    = dragOverIdx !== -1 && dragOverIdx === idx && !isDraggingDown;
+            const showBottomIndicator = dragOverIdx !== -1 && dragOverIdx === idx && isDraggingDown;
 
-        // ── Group header ──────────────────────────────────────────────────────
-        if (item.isGroupHeader) {
-          const group = item.cmd as GroupNode;
-          return (
-            <div key={item.key}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => {
-                  if (cmdId) handleRowClick(e, cmdId);
-                  handleGroupToggle(item.key);
-                }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                onMouseEnter={() => setHoverKey(item.key)}
-                onMouseLeave={() => setHoverKey(null)}
-                className={`flex items-center gap-1.5 px-2 py-[3px] cursor-pointer rounded-sm text-xs ${rowBg}`}
-              >
-                <span className="text-gray-400 w-3 shrink-0 text-center">
-                  {item.groupCollapsed ? '▸' : '▾'}
-                </span>
-                <span className="text-gray-100 font-bold">{group.name}</span>
-                <span className="text-gray-500 ml-1">
-                  ({group.commands.length} command{group.commands.length !== 1 ? 's' : ''})
-                </span>
-              </div>
-            </div>
-          );
-        }
+            const rowBg = isSelected
+              ? 'bg-blue-600/40'
+              : isPreview
+              ? 'bg-blue-500/15'
+              : 'hover:bg-gray-700/50';
 
-        const { cmd } = item;
-
-        // ── Line / LineFix ────────────────────────────────────────────────────
-        if (cmd.kind === 'Line') {
-          const color = valveColor(cmd.valve);
-          const kw = cmd.commandKeyword ?? 'Line';
-          const isExpanded = expandedKey === item.key;
-          const rawLines = isExpanded ? serializePatternCommand(cmd) : [];
-
-          return (
-            <div key={item.key} style={{ paddingLeft: indent }}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => {
-                  if (cmdId) handleRowClick(e, cmdId);
-                }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                onMouseEnter={() => setHoverKey(item.key)}
-                onMouseLeave={() => setHoverKey(null)}
-                className={[
-                  'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
-                  rowBg,
-                  cmd.disabled ? 'opacity-50' : '',
-                ].join(' ')}
-              >
-                <ChainConnector pos={item.chainPos} color={item.chainColor} />
-                <span style={{ color }} className="font-mono font-bold text-xs w-6 shrink-0">
-                  P{cmd.valve}
-                </span>
-                <span data-coord={`start:${cmdId}`} style={{ color }} className="font-mono text-[10px] shrink-0">
-                  ({fmtPt(cmd.startPoint)})
-                </span>
-                <span className="text-gray-500 text-[10px] shrink-0">→</span>
-                <span data-coord={`end:${cmdId}`} style={{ color }} className="font-mono text-[10px] shrink-0">
-                  ({fmtPt(cmd.endPoint)})
-                </span>
-                <span className="text-gray-400 text-[10px] flex-1 min-w-0 truncate pl-1">
-                  {cmd.flowRate.value.toFixed(4)} {cmd.flowRate.unit}
-                </span>
-                <span className="text-gray-600 font-mono text-[10px] shrink-0">{kw}</span>
-                <span
-                  onClick={(e) => { e.stopPropagation(); handleExpandToggle(item.key); }}
-                  className="text-gray-500 hover:text-gray-300 text-[10px] shrink-0 ml-1 px-1 cursor-pointer"
+            // ── Group header ────────────────────────────────────────────────
+            if (item.isGroupHeader) {
+              const group = item.cmd as GroupNode;
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
                 >
-                  {isExpanded ? '▾' : '▸'}
-                </span>
-              </div>
-              {isExpanded && (
-                <div
-                  className="mr-2 mb-0.5 rounded border border-gray-700 bg-gray-950 px-3 py-1.5 font-mono text-[10px] text-gray-400"
-                  style={{ marginLeft: 20 }}
+                  <div
+                    data-id={cmdId}
+                    onClick={(e) => {
+                      if (cmdId) handleRowClick(e, cmdId);
+                      handleGroupToggle(item.key);
+                    }}
+                    onContextMenu={(e) => {
+                      if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                      onContextMenu?.(e, cmdId);
+                    }}
+                    onMouseEnter={() => setHoverKey(item.key)}
+                    onMouseLeave={() => setHoverKey(null)}
+                    className={`flex items-center gap-1.5 px-2 py-[3px] cursor-pointer rounded-sm text-xs ${rowBg}`}
+                  >
+                    <span className="text-gray-400 w-3 shrink-0 text-center">
+                      {item.groupCollapsed ? '▸' : '▾'}
+                    </span>
+                    <span className="text-gray-100 font-bold">{group.name}</span>
+                    <span className="text-gray-500 ml-1">
+                      ({group.commands.length} command{group.commands.length !== 1 ? 's' : ''})
+                    </span>
+                  </div>
+                </SortableRow>
+              );
+            }
+
+            const { cmd } = item;
+
+            // ── Line ────────────────────────────────────────────────────────
+            if (cmd.kind === 'Line') {
+              const color = valveColor(cmd.valve);
+              const kw = cmd.commandKeyword ?? 'Line';
+              const isExpanded = expandedKey === item.key;
+              const rawLines = isExpanded ? serializePatternCommand(cmd) : [];
+
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
                 >
-                  {rawLines.map((line, li) => (
-                    <div key={li} className="leading-relaxed">{line}</div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        }
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      onMouseEnter={() => setHoverKey(item.key)}
+                      onMouseLeave={() => setHoverKey(null)}
+                      className={[
+                        'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
+                        rowBg,
+                        cmd.disabled ? 'opacity-50' : '',
+                      ].join(' ')}
+                    >
+                      <ChainConnector pos={item.chainPos} color={item.chainColor} />
+                      <span style={{ color }} className="font-mono font-bold text-xs w-6 shrink-0">
+                        P{cmd.valve}
+                      </span>
+                      <span data-coord={`start:${cmdId}`} style={{ color }} className="font-mono text-[10px] shrink-0">
+                        ({fmtPt(cmd.startPoint)})
+                      </span>
+                      <span className="text-gray-500 text-[10px] shrink-0">→</span>
+                      <span data-coord={`end:${cmdId}`} style={{ color }} className="font-mono text-[10px] shrink-0">
+                        ({fmtPt(cmd.endPoint)})
+                      </span>
+                      <span className="text-gray-400 text-[10px] flex-1 min-w-0 truncate pl-1">
+                        {cmd.flowRate.value.toFixed(4)} {cmd.flowRate.unit}
+                      </span>
+                      <span className="text-gray-600 font-mono text-[10px] shrink-0">{kw}</span>
+                      <span
+                        onClick={(e) => { e.stopPropagation(); handleExpandToggle(item.key); }}
+                        className="text-gray-500 hover:text-gray-300 text-[10px] shrink-0 ml-1 px-1 cursor-pointer"
+                      >
+                        {isExpanded ? '▾' : '▸'}
+                      </span>
+                    </div>
+                    {isExpanded && (
+                      <div
+                        className="mr-2 mb-0.5 rounded border border-gray-700 bg-gray-950 px-3 py-1.5 font-mono text-[10px] text-gray-400"
+                        style={{ marginLeft: 20 }}
+                      >
+                        {rawLines.map((line, li) => (
+                          <div key={li} className="leading-relaxed">{line}</div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </SortableRow>
+              );
+            }
 
-        // ── Dot ───────────────────────────────────────────────────────────────
-        if (cmd.kind === 'Dot') {
-          const color = valveColor(cmd.valve);
+            // ── Dot ─────────────────────────────────────────────────────────
+            if (cmd.kind === 'Dot') {
+              const color = valveColor(cmd.valve);
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
+                >
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      onMouseEnter={() => setHoverKey(item.key)}
+                      onMouseLeave={() => setHoverKey(null)}
+                      className={[
+                        'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
+                        rowBg,
+                        cmd.disabled ? 'opacity-50' : '',
+                      ].join(' ')}
+                    >
+                      <div style={{ width: 16, flexShrink: 0 }} />
+                      <span style={{ color }} className="font-mono font-bold text-xs w-6 shrink-0">
+                        P{cmd.valve}
+                      </span>
+                      <span data-coord={`dot:${cmdId}`} style={{ color }} className="font-mono text-[10px]">
+                        ({fmtPt(cmd.point)})
+                      </span>
+                      <span className="text-gray-600 font-mono text-[10px] ml-auto shrink-0">Dot</span>
+                    </div>
+                  </div>
+                </SortableRow>
+              );
+            }
+
+            // ── Comment ──────────────────────────────────────────────────────
+            if (cmd.kind === 'Comment') {
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
+                >
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                    >
+                      <div style={{ width: 16, flexShrink: 0 }} />
+                      <span className="font-mono text-[10px] text-green-500 truncate">
+                        # {cmd.text}
+                      </span>
+                    </div>
+                  </div>
+                </SortableRow>
+              );
+            }
+
+            // ── Mark / Laser ─────────────────────────────────────────────────
+            if (cmd.kind === 'Mark' || cmd.kind === 'Laser') {
+              const preview = cmd.raw.length > 48 ? cmd.raw.slice(0, 48) + '…' : cmd.raw;
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
+                >
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      className={`flex items-center gap-1.5 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                    >
+                      <div style={{ width: 16, flexShrink: 0 }} />
+                      <span className="font-mono text-[10px] text-gray-500 shrink-0">{cmd.kind}</span>
+                      <span className="font-mono text-[10px] text-gray-600 truncate">{preview}</span>
+                    </div>
+                  </div>
+                </SortableRow>
+              );
+            }
+
+            // ── Raw fallback ─────────────────────────────────────────────────
+            if (cmd.kind === 'Raw') {
+              const preview = cmd.raw.length > 60 ? cmd.raw.slice(0, 60) + '…' : cmd.raw;
+              return (
+                <SortableRow
+                  key={item.key}
+                  id={item.key}
+                  showTopIndicator={showTopIndicator}
+                  showBottomIndicator={showBottomIndicator}
+                >
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                    >
+                      <div style={{ width: 16, flexShrink: 0 }} />
+                      <span className="font-mono text-[10px] text-gray-600 italic truncate">{preview}</span>
+                    </div>
+                  </div>
+                </SortableRow>
+              );
+            }
+
+            return null;
+          })}
+        </div>
+      </SortableContext>
+
+      {/* Drag overlay — ghost that follows the cursor */}
+      <DragOverlay dropAnimation={null}>
+        {dragActiveId !== null ? (() => {
+          const dragItem = items.find((it) => it.key === String(dragActiveId));
+          const isMulti = dragItem?.cmdId && selectedCommandIds.has(dragItem.cmdId) && selectedCommandIds.size > 1;
+          const label = isMulti
+            ? `${selectedCommandIds.size} commands`
+            : dragItem?.cmd.kind ?? 'Item';
           return (
-            <div key={item.key} style={{ paddingLeft: indent }}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                onMouseEnter={() => setHoverKey(item.key)}
-                onMouseLeave={() => setHoverKey(null)}
-                className={[
-                  'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
-                  rowBg,
-                  cmd.disabled ? 'opacity-50' : '',
-                ].join(' ')}
-              >
-                <div style={{ width: 16, flexShrink: 0 }} />
-                <span style={{ color }} className="font-mono font-bold text-xs w-6 shrink-0">
-                  P{cmd.valve}
-                </span>
-                <span data-coord={`dot:${cmdId}`} style={{ color }} className="font-mono text-[10px]">
-                  ({fmtPt(cmd.point)})
-                </span>
-                <span className="text-gray-600 font-mono text-[10px] ml-auto shrink-0">Dot</span>
-              </div>
+            <div className="bg-gray-800 border border-blue-400/50 rounded shadow-2xl px-3 py-1.5 text-xs text-gray-200 opacity-90 pointer-events-none">
+              {label}
             </div>
           );
-        }
-
-        // ── Comment ───────────────────────────────────────────────────────────
-        if (cmd.kind === 'Comment') {
-          return (
-            <div key={item.key} style={{ paddingLeft: indent }}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
-              >
-                <div style={{ width: 16, flexShrink: 0 }} />
-                <span className="font-mono text-[10px] text-green-500 truncate">
-                  # {cmd.text}
-                </span>
-              </div>
-            </div>
-          );
-        }
-
-        // ── Mark / Laser ──────────────────────────────────────────────────────
-        if (cmd.kind === 'Mark' || cmd.kind === 'Laser') {
-          const preview = cmd.raw.length > 48 ? cmd.raw.slice(0, 48) + '…' : cmd.raw;
-          return (
-            <div key={item.key} style={{ paddingLeft: indent }}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                className={`flex items-center gap-1.5 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
-              >
-                <div style={{ width: 16, flexShrink: 0 }} />
-                <span className="font-mono text-[10px] text-gray-500 shrink-0">{cmd.kind}</span>
-                <span className="font-mono text-[10px] text-gray-600 truncate">{preview}</span>
-              </div>
-            </div>
-          );
-        }
-
-        // ── Raw fallback ──────────────────────────────────────────────────────
-        if (cmd.kind === 'Raw') {
-          const preview = cmd.raw.length > 60 ? cmd.raw.slice(0, 60) + '…' : cmd.raw;
-          return (
-            <div key={item.key} style={{ paddingLeft: indent }}>
-              <div
-                data-id={cmdId}
-                onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
-                onContextMenu={(e) => {
-                  if (cmdId && !selectedCommandIds.has(cmdId)) {
-                    onSelect(cmdId, 'single', allVisibleIds);
-                  }
-                  onContextMenu?.(e, cmdId);
-                }}
-                className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
-              >
-                <div style={{ width: 16, flexShrink: 0 }} />
-                <span className="font-mono text-[10px] text-gray-600 italic truncate">{preview}</span>
-              </div>
-            </div>
-          );
-        }
-
-        return null;
-      })}
-    </div>
+        })() : null}
+      </DragOverlay>
+    </DndContext>
   );
 }

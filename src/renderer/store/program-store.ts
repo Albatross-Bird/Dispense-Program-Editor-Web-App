@@ -4,7 +4,16 @@ import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
 import { MYD_DEFAULT } from '@lib/syntax-profiles';
 
-const MAX_HISTORY = 50;
+const MAX_HISTORY = 200;
+
+// ── History ───────────────────────────────────────────────────────────────────
+
+export interface HistoryEntry {
+  id: string;
+  label: string;
+  timestamp: number;
+  snapshot: Program;
+}
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
 
@@ -47,6 +56,10 @@ function collectSelectedLines(cmds: PatternCommand[], ids: Set<string>): LineCom
   return result;
 }
 
+function makeEntry(label: string, snapshot: Program): HistoryEntry {
+  return { id: genId(), label, timestamp: Date.now(), snapshot };
+}
+
 // ── Re-export genId so Canvas can use the same generator ─────────────────────
 export { genId };
 
@@ -54,48 +67,39 @@ interface ProgramStore {
   program: Program | null;
   filePath: string | null;
   isDirty: boolean;
-  /** Non-null when the last save attempt failed (e.g. read-only file). */
   saveError: string | null;
-  selectedPatternName: string | null; // null = Main block
-  /** IDs of all currently selected PatternCommands. */
+  selectedPatternName: string | null;
   selectedCommandIds: Set<string>;
-  /** The anchor ID for shift-click range selection. */
   lastSelectedId: string | null;
-  history: Program[];
-  historyIndex: number;
+
+  // ── History ──────────────────────────────────────────────────────────────
+  historyEntries: HistoryEntry[];
+  historyCurrentIndex: number;
 
   load: () => Promise<void>;
   save: () => Promise<void>;
   saveAs: () => Promise<void>;
   clearSaveError: () => void;
-  setProgram: (program: Program) => void;
+  /** Push a new history entry and update the program. Discards any future branch. */
+  setProgram: (program: Program, label?: string) => void;
   selectPattern: (name: string | null) => void;
-  /** Replace selection with exactly one ID (or clear if null). */
   selectOne: (id: string | null) => void;
-  /** Toggle a single ID in/out of the selection. */
   selectToggle: (id: string) => void;
-  /**
-   * Extend selection from the last anchor to `id`, using `allIds` as the
-   * ordered list defining the range.  Falls back to single-select when
-   * there is no anchor or the anchor is not in `allIds`.
-   */
   selectRange: (id: string, allIds: string[]) => void;
-  /** Clear all selections. */
   clearSelection: () => void;
   undo: () => void;
   redo: () => void;
-  /** Insert a command after the last selected command (or at pattern end). Selects the new command. */
-  insertAfterSelection: (cmd: PatternCommand) => void;
-  /** Requires exactly 2 selected Lines: moves first.endPoint → second.startPoint. */
+  /** Jump to a specific history entry by index (works for past and future). */
+  jumpToHistory: (index: number) => void;
+  insertAfterSelection: (cmd: PatternCommand, label?: string) => void;
+  bulkInsertAfterSelection: (cmds: PatternCommand[], label?: string) => void;
   mergeEndToStart: () => void;
-  /** Requires exactly 2 selected Lines: moves second.startPoint → first.endPoint. */
   mergeStartToEnd: () => void;
-  /** Adds an epsilon offset to the endPoint of the first line in each connected junction among selected lines. */
   disconnectLines: () => void;
-  /** Wraps top-level selected commands in a new GroupNode with the given name. */
   groupSelection: (name: string) => void;
-  /** Expands the first selected GroupNode back to its parent level. */
   ungroupSelection: () => void;
+  /** Replace the top-level command matching `id` in the selected pattern. */
+  replaceCommand: (id: string, newCmd: PatternCommand, label: string) => void;
 }
 
 declare global {
@@ -111,6 +115,24 @@ declare global {
   }
 }
 
+// ── Internal helper: push a history entry, discard future branch, cap at MAX ──
+
+function pushEntry(
+  entries: HistoryEntry[],
+  currentIndex: number,
+  label: string,
+  program: Program,
+): { entries: HistoryEntry[]; currentIndex: number } {
+  // Discard future branch
+  const base = entries.slice(0, currentIndex + 1);
+  base.push(makeEntry(label, structuredClone(program)));
+  // Cap: always keep entry 0; drop entry 1 if over limit
+  while (base.length > MAX_HISTORY && base.length > 1) {
+    base.splice(1, 1);
+  }
+  return { entries: base, currentIndex: base.length - 1 };
+}
+
 export const useProgramStore = create<ProgramStore>((set, get) => ({
   program: null,
   filePath: null,
@@ -119,13 +141,14 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
   selectedPatternName: null,
   selectedCommandIds: new Set<string>(),
   lastSelectedId: null,
-  history: [],
-  historyIndex: -1,
+  historyEntries: [],
+  historyCurrentIndex: -1,
 
   load: async () => {
     const result = await window.electronAPI.openFile();
     if (!result) return;
     const program = parse(result.content, MYD_DEFAULT);
+    const entry = makeEntry('File opened', structuredClone(program));
     set({
       program,
       filePath: result.filePath,
@@ -133,8 +156,8 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       selectedPatternName: null,
       selectedCommandIds: new Set<string>(),
       lastSelectedId: null,
-      history: [program],
-      historyIndex: 0,
+      historyEntries: [entry],
+      historyCurrentIndex: 0,
     });
   },
 
@@ -163,10 +186,10 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     if (savedPath) set({ filePath: savedPath, isDirty: false });
   },
 
-  setProgram: (program: Program) => {
-    const { history, historyIndex } = get();
-    const newHistory = [...history.slice(0, historyIndex + 1), program].slice(-MAX_HISTORY);
-    set({ program, isDirty: true, history: newHistory, historyIndex: newHistory.length - 1 });
+  setProgram: (program: Program, label = 'Edit') => {
+    const { historyEntries, historyCurrentIndex } = get();
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, program);
+    set({ program, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
   },
 
   selectPattern: (name: string | null) =>
@@ -197,15 +220,34 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     }
     const [lo, hi] = anchorIdx < targetIdx ? [anchorIdx, targetIdx] : [targetIdx, anchorIdx];
     set({ selectedCommandIds: new Set(allIds.slice(lo, hi + 1)) });
-    // lastSelectedId stays as anchor — don't update it on shift-click
   },
 
   clearSaveError: () => set({ saveError: null }),
 
   clearSelection: () => set({ selectedCommandIds: new Set<string>(), lastSelectedId: null }),
 
-  insertAfterSelection: (cmd: PatternCommand) => {
-    const { program, selectedPatternName, lastSelectedId, history, historyIndex } = get();
+  undo: () => {
+    const { historyEntries, historyCurrentIndex } = get();
+    if (historyCurrentIndex <= 0) return;
+    const i = historyCurrentIndex - 1;
+    set({ program: structuredClone(historyEntries[i].snapshot), historyCurrentIndex: i, isDirty: true });
+  },
+
+  redo: () => {
+    const { historyEntries, historyCurrentIndex } = get();
+    if (historyCurrentIndex >= historyEntries.length - 1) return;
+    const i = historyCurrentIndex + 1;
+    set({ program: structuredClone(historyEntries[i].snapshot), historyCurrentIndex: i, isDirty: true });
+  },
+
+  jumpToHistory: (index: number) => {
+    const { historyEntries } = get();
+    if (index < 0 || index >= historyEntries.length) return;
+    set({ program: structuredClone(historyEntries[index].snapshot), historyCurrentIndex: index, isDirty: true });
+  },
+
+  insertAfterSelection: (cmd: PatternCommand, label = 'Insert command') => {
+    const { program, selectedPatternName, lastSelectedId, historyEntries, historyCurrentIndex } = get();
     if (!program || !selectedPatternName) return;
     const pattern = program.patterns.find((p) => p.name === selectedPatternName);
     if (!pattern) return;
@@ -226,12 +268,45 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
         p.name === selectedPatternName ? { ...p, commands: newCmds } : p,
       ),
     };
-    const newHistory = [...history.slice(0, historyIndex + 1), newProgram].slice(-MAX_HISTORY);
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
     set({
       program: newProgram, isDirty: true,
-      history: newHistory, historyIndex: newHistory.length - 1,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: cmd.id ? new Set([cmd.id]) : new Set<string>(),
       lastSelectedId: cmd.id ?? null,
+    });
+  },
+
+  bulkInsertAfterSelection: (cmds: PatternCommand[], label = 'Insert commands') => {
+    if (cmds.length === 0) return;
+    const { program, selectedPatternName, lastSelectedId, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    let newCmds: PatternCommand[];
+    if (lastSelectedId) {
+      const idx = pattern.commands.findIndex((c) => c.id === lastSelectedId);
+      newCmds = idx !== -1
+        ? [...pattern.commands.slice(0, idx + 1), ...cmds, ...pattern.commands.slice(idx + 1)]
+        : [...pattern.commands, ...cmds];
+    } else {
+      newCmds = [...pattern.commands, ...cmds];
+    }
+
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === selectedPatternName ? { ...p, commands: newCmds } : p,
+      ),
+    };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    const insertedIds = cmds.map((c) => c.id).filter((id): id is string => Boolean(id));
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: new Set(insertedIds),
+      lastSelectedId: insertedIds[insertedIds.length - 1] ?? null,
     });
   },
 
@@ -252,7 +327,10 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (clone as any)._raw = undefined;
 
-    get().setProgram({ ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) });
+    get().setProgram(
+      { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
+      'Merge End→Start',
+    );
   },
 
   mergeStartToEnd: () => {
@@ -272,7 +350,10 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (clone as any)._raw = undefined;
 
-    get().setProgram({ ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) });
+    get().setProgram(
+      { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
+      'Merge Start←End',
+    );
   },
 
   disconnectLines: () => {
@@ -303,16 +384,18 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     }
 
     if (!modified) return;
-    get().setProgram({ ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) });
+    get().setProgram(
+      { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) },
+      'Disconnect lines',
+    );
   },
 
   groupSelection: (name: string) => {
-    const { program, selectedPatternName, selectedCommandIds, history, historyIndex } = get();
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
     if (!program || !selectedPatternName || selectedCommandIds.size === 0) return;
     const pattern = program.patterns.find((p) => p.name === selectedPatternName);
     if (!pattern) return;
 
-    // Collect top-level selected commands in document order
     const selected: PatternCommand[] = [];
     const selectedIndices = new Set<number>();
     for (let i = 0; i < pattern.commands.length; i++) {
@@ -339,25 +422,27 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     }
 
     const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
-    const newHistory = [...history.slice(0, historyIndex + 1), newProgram].slice(-MAX_HISTORY);
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Group: ${name}`, newProgram);
     set({
       program: newProgram, isDirty: true,
-      history: newHistory, historyIndex: newHistory.length - 1,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: new Set([groupNode.id!]),
       lastSelectedId: groupNode.id!,
     });
   },
 
   ungroupSelection: () => {
-    const { program, selectedPatternName, selectedCommandIds, history, historyIndex } = get();
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
     if (!program || !selectedPatternName) return;
     const pattern = program.patterns.find((p) => p.name === selectedPatternName);
     if (!pattern) return;
 
+    let ungroupedName = '';
     let ungrouped = false;
     const newCmds: PatternCommand[] = [];
     for (const cmd of pattern.commands) {
       if (!ungrouped && cmd.kind === 'Group' && cmd.id && selectedCommandIds.has(cmd.id)) {
+        ungroupedName = cmd.name;
         newCmds.push(...cmd.commands);
         ungrouped = true;
       } else {
@@ -367,25 +452,40 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     if (!ungrouped) return;
 
     const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
-    const newHistory = [...history.slice(0, historyIndex + 1), newProgram].slice(-MAX_HISTORY);
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Ungroup: ${ungroupedName}`, newProgram);
     set({
       program: newProgram, isDirty: true,
-      history: newHistory, historyIndex: newHistory.length - 1,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: new Set<string>(), lastSelectedId: null,
     });
   },
 
-  undo: () => {
-    const { history, historyIndex } = get();
-    if (historyIndex <= 0) return;
-    const i = historyIndex - 1;
-    set({ program: history[i], historyIndex: i, isDirty: true });
-  },
+  replaceCommand: (id: string, newCmd: PatternCommand, label: string) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
 
-  redo: () => {
-    const { history, historyIndex } = get();
-    if (historyIndex >= history.length - 1) return;
-    const i = historyIndex + 1;
-    set({ program: history[i], historyIndex: i, isDirty: true });
+    const idx = pattern.commands.findIndex((c) => c.id === id);
+    if (idx === -1) return;
+
+    const newCmds = [
+      ...pattern.commands.slice(0, idx),
+      newCmd,
+      ...pattern.commands.slice(idx + 1),
+    ];
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === selectedPatternName ? { ...p, commands: newCmds } : p,
+      ),
+    };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: newCmd.id ? new Set([newCmd.id]) : new Set<string>(),
+      lastSelectedId: newCmd.id ?? null,
+    });
   },
 }));

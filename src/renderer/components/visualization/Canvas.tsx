@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useProgramStore, genId } from '../../store/program-store';
 import { useUIStore } from '../../store/ui-store';
+import { pointInPolygon, nearestPointOnEdge } from '@lib/polygon';
 import { useCalibrationStore } from '../../store/calibration-store';
 import type { PatternCommand, LineCommand, DotCommand } from '@lib/types';
 import type { AffineTransform } from '@lib/affine';
@@ -103,6 +104,171 @@ function drawCalibPoints(
 
     ctx.restore();
   }
+}
+
+// ── Area fill overlay ─────────────────────────────────────────────────────────
+
+const POLY_COLOR       = '#06b6d4'; // cyan-500
+const POLY_FILL_COLOR  = 'rgba(6, 182, 212, 0.12)';
+const POLY_VERTEX_R    = 7;         // screen px radius for vertex handles
+
+function drawAreaFillOverlay(
+  ctx: CanvasRenderingContext2D,
+  vertices: [number, number][],
+  closed: boolean,
+  cursorWorld: [number, number] | null,
+  cam: Camera,
+  activeVertexIdx: number | null,
+) {
+  if (vertices.length === 0) return;
+
+  const sv = vertices.map(([wx, wy]) => worldToScreen(wx, wy, cam));
+
+  ctx.save();
+
+  if (closed) {
+    // Semi-transparent fill
+    ctx.beginPath();
+    ctx.moveTo(sv[0][0], sv[0][1]);
+    for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i][0], sv[i][1]);
+    ctx.closePath();
+    ctx.fillStyle = POLY_FILL_COLOR;
+    ctx.fill();
+
+    // Dashed outline
+    ctx.setLineDash([6, 4]);
+    ctx.strokeStyle = POLY_COLOR;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Vertex handles
+    for (let i = 0; i < sv.length; i++) {
+      const [sx, sy] = sv[i];
+      const isActive = activeVertexIdx === i;
+      ctx.beginPath();
+      ctx.arc(sx, sy, POLY_VERTEX_R, 0, Math.PI * 2);
+      ctx.fillStyle = isActive ? '#ffffff' : POLY_COLOR;
+      ctx.fill();
+      ctx.strokeStyle = '#1e2433';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+  } else {
+    // ── Drawing phase ────────────────────────────────────────────────────────
+
+    // Placed edges
+    if (sv.length >= 2) {
+      ctx.setLineDash([6, 4]);
+      ctx.strokeStyle = POLY_COLOR;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(sv[0][0], sv[0][1]);
+      for (let i = 1; i < sv.length; i++) ctx.lineTo(sv[i][0], sv[i][1]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Rubber-band + closure hint
+    if (cursorWorld) {
+      const [csx, csy] = worldToScreen(cursorWorld[0], cursorWorld[1], cam);
+      const last = sv[sv.length - 1];
+
+      // Line from last vertex to cursor
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = POLY_COLOR;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.9;
+      ctx.beginPath();
+      ctx.moveTo(last[0], last[1]);
+      ctx.lineTo(csx, csy);
+      ctx.stroke();
+
+      // Dashed closure hint back to first vertex
+      if (sv.length >= 2) {
+        ctx.setLineDash([2, 6]);
+        ctx.strokeStyle = POLY_COLOR;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.4;
+        ctx.beginPath();
+        ctx.moveTo(csx, csy);
+        ctx.lineTo(sv[0][0], sv[0][1]);
+        ctx.stroke();
+      }
+
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
+    // Vertex handles
+    for (let i = 0; i < sv.length; i++) {
+      const [sx, sy] = sv[i];
+      ctx.beginPath();
+      ctx.arc(sx, sy, POLY_VERTEX_R, 0, Math.PI * 2);
+      ctx.fillStyle = POLY_COLOR;
+      ctx.fill();
+      ctx.strokeStyle = '#1e2433';
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
+    }
+
+    // Larger ring around first vertex (closure target indicator)
+    if (sv.length >= 2) {
+      ctx.beginPath();
+      ctx.arc(sv[0][0], sv[0][1], POLY_VERTEX_R + 4, 0, Math.PI * 2);
+      ctx.strokeStyle = POLY_COLOR;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = 0.6;
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  ctx.restore();
+}
+
+// ── Polygon hit testing ───────────────────────────────────────────────────────
+
+/** Returns index of vertex within threshold screen-px, or -1. */
+function hitTestPolyVertex(
+  sx: number, sy: number,
+  vertices: [number, number][],
+  cam: Camera,
+  threshold = POLY_VERTEX_R + 4,
+): number {
+  for (let i = 0; i < vertices.length; i++) {
+    const [hsx, hsy] = worldToScreen(vertices[i][0], vertices[i][1], cam);
+    if (Math.hypot(sx - hsx, sy - hsy) < threshold) return i;
+  }
+  return -1;
+}
+
+/**
+ * Returns { edgeIdx, point } for the nearest edge within threshold, or null.
+ * `edgeIdx` is the index of the start vertex of the edge.
+ */
+function hitTestPolyEdge(
+  sx: number, sy: number,
+  vertices: [number, number][],
+  cam: Camera,
+  threshold = 6,
+): { edgeIdx: number; worldPt: [number, number] } | null {
+  let best: { edgeIdx: number; worldPt: [number, number] } | null = null;
+  let bestDist = threshold;
+  for (let i = 0; i < vertices.length; i++) {
+    const j = (i + 1) % vertices.length;
+    const [asx, asy] = worldToScreen(vertices[i][0], vertices[i][1], cam);
+    const [bsx, bsy] = worldToScreen(vertices[j][0], vertices[j][1], cam);
+    const res = nearestPointOnEdge([sx, sy], [asx, asy], [bsx, bsy]);
+    if (res.distance < bestDist) {
+      bestDist = res.distance;
+      // Convert screen nearest-point back to world
+      const [wx, wy] = [(res.point[0] - cam.panX) / cam.zoom, (res.point[1] - cam.panY) / cam.zoom];
+      best = { edgeIdx: i, worldPt: [wx, wy] };
+    }
+  }
+  return best;
 }
 
 /**
@@ -332,6 +498,41 @@ export default function Canvas() {
   const activeToolRef = useRef(activeTool);
   useEffect(() => { activeToolRef.current = activeTool; }, [activeTool]);
 
+  // ── Area fill state ────────────────────────────────────────────────────────
+  const areaFillPolygon        = useUIStore((s) => s.areaFillPolygon);
+  const areaFillClosed         = useUIStore((s) => s.areaFillClosed);
+  const areaFillPreviewCmds    = useUIStore((s) => s.areaFillPreviewCmds);
+  const setAreaFillPolygon     = useUIStore((s) => s.setAreaFillPolygon);
+  const setAreaFillClosed      = useUIStore((s) => s.setAreaFillClosed);
+  const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
+
+  // Stable refs for use inside window-level callbacks
+  const areaFillPolygonRef      = useRef(areaFillPolygon);
+  const areaFillClosedRef       = useRef(areaFillClosed);
+  const areaFillPreviewCmdsRef  = useRef(areaFillPreviewCmds);
+  useEffect(() => { areaFillPolygonRef.current = areaFillPolygon; }, [areaFillPolygon]);
+  useEffect(() => { areaFillClosedRef.current = areaFillClosed; }, [areaFillClosed]);
+  useEffect(() => { areaFillPreviewCmdsRef.current = areaFillPreviewCmds; }, [areaFillPreviewCmds]);
+
+  // Cursor world position for rubber-band (ref only — no React state)
+  const polygonCursorRef = useRef<[number, number] | null>(null);
+
+  // Active vertex index while dragging/hovering (only for editing mode)
+  const [polyActiveVertIdx, setPolyActiveVertIdx] = useState<number | null>(null);
+  const polyActiveVertIdxRef = useRef<number | null>(null);
+  useEffect(() => { polyActiveVertIdxRef.current = polyActiveVertIdx; }, [polyActiveVertIdx]);
+
+  // Area fill drag state (vertex drag or whole-polygon move)
+  interface PolyDragState {
+    type: 'vertex' | 'polygon';
+    vertexIdx?: number;
+    startMouseWx: number;
+    startMouseWy: number;
+    startVerts: [number, number][];
+  }
+  const polyDragRef = useRef<PolyDragState | null>(null);
+  const polyDragCleanupRef = useRef<(() => void) | null>(null);
+
   // Sync placementPhase with activeTool
   useEffect(() => {
     if (activeTool === 'new-line') { setPlacementPhase('line-start'); placementLineStartRef.current = null; }
@@ -545,9 +746,33 @@ export default function Canvas() {
           if (handles.length > 0) drawHandles(ctx, handles, cameraRef.current);
         }
       }
+
+      // Draw area fill polygon overlay (always on top)
+      if (activeToolRef.current === 'area-fill') {
+        // Live preview commands (semi-transparent)
+        const previewCmds = areaFillPreviewCmdsRef.current;
+        if (previewCmds.length > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          const noSelection = new Set<string>();
+          for (const cmd of previewCmds) {
+            drawCommand(ctx, cmd, cameraRef.current, noSelection);
+          }
+          ctx.restore();
+        }
+
+        drawAreaFillOverlay(
+          ctx,
+          areaFillPolygonRef.current,
+          areaFillClosedRef.current,
+          areaFillClosedRef.current ? null : polygonCursorRef.current,
+          cameraRef.current,
+          polyActiveVertIdxRef.current,
+        );
+      }
     };
     requestAnimationFrame(drawRef.current);
-  }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx]);
+  }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds]);
 
   // Fit to view only when the selected pattern or file changes — not on every edit
   const fittedRef = useRef(false);
@@ -621,6 +846,7 @@ export default function Canvas() {
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && activeToolRef.current) {
+        if (activeToolRef.current === 'area-fill') clearAreaFill();
         setActiveTool(null);
         return;
       }
@@ -696,6 +922,61 @@ export default function Canvas() {
     window.addEventListener('mousemove', handleMove);
     window.addEventListener('mouseup', handleUp);
   }, []);
+
+  // ── Area fill polygon drag helper ─────────────────────────────────────────
+
+  const startPolyDrag = useCallback((
+    type: 'vertex' | 'polygon',
+    startSx: number,
+    startSy: number,
+    vertexIdx?: number,
+  ) => {
+    const [startWx, startWy] = screenToWorld(startSx, startSy, cameraRef.current);
+    polyDragRef.current = {
+      type,
+      vertexIdx,
+      startMouseWx: startWx,
+      startMouseWy: startWy,
+      startVerts: areaFillPolygonRef.current.map((v): [number, number] => [...v]),
+    };
+    if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+
+    const handleMove = (e: MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !polyDragRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const [wx, wy] = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cameraRef.current);
+      const ds = polyDragRef.current;
+      const dx = wx - ds.startMouseWx;
+      const dy = wy - ds.startMouseWy;
+
+      let newVerts: [number, number][];
+      if (ds.type === 'vertex' && ds.vertexIdx !== undefined) {
+        newVerts = ds.startVerts.map((v, i): [number, number] =>
+          i === ds.vertexIdx ? [v[0] + dx, v[1] + dy] : [...v],
+        );
+      } else {
+        newVerts = ds.startVerts.map(([x, y]): [number, number] => [x + dx, y + dy]);
+      }
+      setAreaFillPolygon(newVerts);
+      requestAnimationFrame(drawRef.current);
+    };
+
+    const handleUp = () => {
+      polyDragRef.current = null;
+      if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      polyDragCleanupRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    polyDragCleanupRef.current = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [setAreaFillPolygon]);
 
   // ── Command handle drag helper ────────────────────────────────────────────
 
@@ -825,8 +1106,13 @@ export default function Canvas() {
               p.name === patName ? { ...p, commands: wc } : p,
             ),
           };
-          // setProgram is captured from the outer scope — it's a stable Zustand ref
-          setProgram(newProgram);
+          // Compute a descriptive label from the drag state
+          const role = ds.handle.role;
+          const dragLabel =
+            role === 'junction' ? 'Move shared junction' :
+            role === 'dot'      ? 'Move dot'             :
+                                  'Move line endpoint';
+          setProgram(newProgram, dragLabel);
         }
       }
 
@@ -921,6 +1207,46 @@ export default function Canvas() {
           return;
         }
 
+        // ── Area fill polygon interaction ─────────────────────────────────
+        if (activeToolRef.current === 'area-fill') {
+          const verts = areaFillPolygonRef.current;
+          const closed = areaFillClosedRef.current;
+
+          if (closed) {
+            // ── Editing mode ───────────────────────────────────────────────
+
+            // 1. Vertex handle hit
+            const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+            if (vIdx !== -1) {
+              startPolyDrag('vertex', sx, sy, vIdx);
+              return;
+            }
+
+            // 2. Edge click — insert new vertex
+            const edgeHit = hitTestPolyEdge(sx, sy, verts, cameraRef.current);
+            if (edgeHit) {
+              const newVerts = [...verts];
+              newVerts.splice(edgeHit.edgeIdx + 1, 0, edgeHit.worldPt);
+              setAreaFillPolygon(newVerts);
+              // Immediately start dragging the new vertex
+              startPolyDrag('vertex', sx, sy, edgeHit.edgeIdx + 1);
+              return;
+            }
+
+            // 3. Interior — move whole polygon
+            const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
+            if (pointInPolygon([wx, wy], verts)) {
+              startPolyDrag('polygon', sx, sy);
+              return;
+            }
+          } else {
+            // ── Drawing mode — place vertex ────────────────────────────────
+            const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
+            setAreaFillPolygon([...verts, [wx, wy]]);
+          }
+          return;
+        }
+
         // ── Placement mode ────────────────────────────────────────────────
         if (activeToolRef.current) {
           const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
@@ -932,7 +1258,7 @@ export default function Canvas() {
               valve: 1, point: [wx, wy, 0],
               disabled: false, valveState: 'ValveOn',
             };
-            insertAfterSelection(newCmd);
+            insertAfterSelection(newCmd, 'Create dot');
             setActiveTool(null);
             return;
           }
@@ -950,7 +1276,7 @@ export default function Canvas() {
                 disabled: false,
                 flowRate: { value: 0.5, unit: 'mg/mm' },
               };
-              insertAfterSelection(newCmd);
+              insertAfterSelection(newCmd, 'Create line');
               setActiveTool(null);
             }
             return;
@@ -997,6 +1323,7 @@ export default function Canvas() {
       selectOne, selectToggle, selectRange, clearSelection,
       imgEl, startHandleDrag, startCalibScaleDrag,
       insertAfterSelection, setActiveTool, placementPhase,
+      setAreaFillPolygon, startPolyDrag,
     ],
   );
 
@@ -1023,6 +1350,37 @@ export default function Canvas() {
         return;
       }
 
+      // ── Area fill hover / rubber-band ──────────────────────────────────
+      if (activeToolRef.current === 'area-fill') {
+        polygonCursorRef.current = [wx, wy];
+        const verts = areaFillPolygonRef.current;
+        const closed = areaFillClosedRef.current;
+
+        if (closed && canvasRef.current) {
+          // Cursor feedback for editing mode
+          const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+          if (vIdx !== -1) {
+            canvasRef.current.style.cursor = 'grab';
+            setPolyActiveVertIdx(vIdx);
+          } else {
+            const edgeHit = hitTestPolyEdge(sx, sy, verts, cameraRef.current);
+            if (edgeHit) {
+              canvasRef.current.style.cursor = 'copy';
+              setPolyActiveVertIdx(null);
+            } else if (pointInPolygon([wx, wy], verts)) {
+              canvasRef.current.style.cursor = 'move';
+              setPolyActiveVertIdx(null);
+            } else {
+              canvasRef.current.style.cursor = 'crosshair';
+              setPolyActiveVertIdx(null);
+            }
+          }
+        }
+
+        requestAnimationFrame(drawRef.current);
+        return;
+      }
+
       // Change cursor when hovering over a handle
       if (!isDraggingRef.current && !isCalibrating && selectedCommandIdsRef.current.size > 0) {
         const cmds = commandsRef.current;
@@ -1036,7 +1394,7 @@ export default function Canvas() {
         }
       }
     },
-    [setCursorCoords, isCalibrating],
+    [setCursorCoords, isCalibrating, setPolyActiveVertIdx],
   );
 
   // ── Mouse up ──────────────────────────────────────────────────────────────
@@ -1054,11 +1412,26 @@ export default function Canvas() {
   const onMouseLeave = useCallback(() => {
     setCursorCoords(null);
     isPanning.current = false;
+    polygonCursorRef.current = null;
+    requestAnimationFrame(drawRef.current);
   }, [setCursorCoords]);
 
   const onDoubleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+
+    // ── Area fill: close polygon ──────────────────────────────────────────
+    if (activeToolRef.current === 'area-fill' && !areaFillClosedRef.current) {
+      // The second click of the double-click already placed a vertex via
+      // onMouseDown. Remove that last vertex then close if ≥ 3 remain.
+      const verts = areaFillPolygonRef.current;
+      const trimmed = verts.slice(0, -1);
+      if (trimmed.length >= 3) {
+        setAreaFillPolygon(trimmed);
+        setAreaFillClosed(true);
+      }
+      return;
+    }
 
     if (isCalibrating) {
       const rect = canvas.getBoundingClientRect();
@@ -1075,15 +1448,9 @@ export default function Canvas() {
           return;
         }
       }
-      return; // don't fit-to-view during calibration
+      return;
     }
-
-    const pts = collectPoints(commands);
-    if (pts.length === 0) return;
-    cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
-    setZoomLevel(cameraRef.current.zoom);
-    requestAnimationFrame(drawRef.current);
-  }, [commands, isCalibrating, calibPixels, setZoomLevel]);
+  }, [isCalibrating, calibPixels, setAreaFillPolygon, setAreaFillClosed]);
 
   // ── Drag-drop (file / image) ──────────────────────────────────────────────
 
@@ -1110,6 +1477,30 @@ export default function Canvas() {
     [setBackgroundImage, patternKey],
   );
 
+  // ── Right-click: remove polygon vertex ───────────────────────────────────
+
+  const onContextMenu = useCallback(
+    (e: React.MouseEvent<HTMLCanvasElement>) => {
+      if (activeToolRef.current !== 'area-fill' || !areaFillClosedRef.current) return;
+      e.preventDefault();
+      const rect = canvasRef.current!.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const verts = areaFillPolygonRef.current;
+      const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+      if (vIdx === -1) return;
+      if (verts.length <= 3) return; // minimum 3 enforced
+      const newVerts = verts.filter((_, i) => i !== vIdx);
+      setAreaFillPolygon(newVerts);
+    },
+    [setAreaFillPolygon],
+  );
+
+  // Cleanup poly drag on unmount
+  useEffect(() => {
+    return () => { if (polyDragCleanupRef.current) polyDragCleanupRef.current(); };
+  }, []);
+
   // ── Render ────────────────────────────────────────────────────────────────
 
   return (
@@ -1126,6 +1517,7 @@ export default function Canvas() {
         onMouseUp={onMouseUp}
         onMouseLeave={onMouseLeave}
         onDoubleClick={onDoubleClick}
+        onContextMenu={onContextMenu}
         style={{ display: 'block', cursor: 'crosshair' }}
       />
 

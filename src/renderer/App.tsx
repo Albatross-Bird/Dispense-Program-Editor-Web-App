@@ -8,6 +8,7 @@ import type { Pattern, Program } from '@lib/types';
 import Canvas from './components/visualization/Canvas';
 import PatternCommandList from './components/PatternCommandList';
 import ToolPanel from './components/ToolPanel';
+import HistoryPanel from './components/HistoryPanel';
 
 // ── Text annotation ───────────────────────────────────────────────────────────
 
@@ -129,23 +130,47 @@ function Toolbar() {
 
 // ── Pattern Selector ──────────────────────────────────────────────────────────
 
+function HistoryToggleIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 15 15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+      <circle cx="7.5" cy="7.5" r="5.5" />
+      <line x1="7.5" y1="4" x2="7.5" y2="7.5" />
+      <line x1="7.5" y1="7.5" x2="10" y2="9.5" />
+    </svg>
+  );
+}
+
 function PatternSelector() {
   const { program, selectedPatternName, selectPattern } = useProgramStore();
+  const historyPanelOpen    = useUIStore((s) => s.historyPanelOpen);
+  const setHistoryPanelOpen = useUIStore((s) => s.setHistoryPanelOpen);
 
   if (!program) return <div className="px-3 py-2 text-xs text-gray-500 shrink-0">No file open</div>;
 
   return (
-    <div className="px-2 py-1.5 border-b border-gray-700 shrink-0">
+    <div className="flex items-center gap-1 px-2 py-1.5 border-b border-gray-700 shrink-0">
       <select
         value={selectedPatternName ?? '__main__'}
         onChange={(e) => selectPattern(e.target.value === '__main__' ? null : e.target.value)}
-        className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
+        className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
       >
         <option value="__main__">Main</option>
         {program.patterns.map((p) => (
           <option key={p.name} value={p.name}>{p.name}</option>
         ))}
       </select>
+      <button
+        onClick={() => setHistoryPanelOpen(!historyPanelOpen)}
+        title="Toggle history panel"
+        className={[
+          'shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors',
+          historyPanelOpen
+            ? 'bg-amber-600/30 text-amber-300 border border-amber-500/50'
+            : 'text-gray-400 hover:bg-gray-700 hover:text-gray-200 border border-transparent',
+        ].join(' ')}
+      >
+        <HistoryToggleIcon />
+      </button>
     </div>
   );
 }
@@ -275,7 +300,7 @@ function SaveErrorToast() {
 
 export default function App() {
   const { filePath, save } = useProgramStore();
-  const { splitRatio, setSplitRatio } = useUIStore();
+  const { splitRatio, setSplitRatio, historyPanelOpen } = useUIStore();
   const { init: initSettings, addRecentFile } = useSettingsStore();
   const { init: initCalibrations } = useCalibrationStore();
 
@@ -292,6 +317,20 @@ export default function App() {
       if ((e.ctrlKey || e.metaKey) && e.key === 's') {
         e.preventDefault();
         save();
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key === 'z') {
+        e.preventDefault();
+        useProgramStore.getState().undo();
+        return;
+      }
+      if (
+        ((e.ctrlKey || e.metaKey) && e.key === 'y') ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z')
+      ) {
+        e.preventDefault();
+        useProgramStore.getState().redo();
+        return;
       }
     };
     window.addEventListener('keydown', handler);
@@ -337,7 +376,10 @@ export default function App() {
         {/* Right: pattern selector + command view */}
         <div className="flex flex-col flex-1 overflow-hidden">
           <PatternSelector />
-          <CommandPane />
+          <div className="flex flex-1 overflow-hidden">
+            <CommandPane />
+            {historyPanelOpen && <HistoryPanel />}
+          </div>
         </div>
       </div>
 

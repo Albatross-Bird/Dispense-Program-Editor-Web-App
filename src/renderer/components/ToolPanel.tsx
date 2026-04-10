@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useProgramStore } from '../store/program-store';
 import { useUIStore } from '../store/ui-store';
+import AreaFillPanel, { useAnchorRect } from './AreaFillPanel';
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────────
 
@@ -63,30 +64,15 @@ function DisconnectIcon() {
   );
 }
 
-function AreaFillLinesIcon() {
+/** Hatched polygon — represents the Area Fill tool. */
+function AreaFillIcon() {
   return (
     <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1.5" y="3" width="14" height="11" rx="1" />
-      <line x1="5" y1="3" x2="5" y2="14" />
-      <line x1="9" y1="3" x2="9" y2="14" />
-      <line x1="13" y1="3" x2="13" y2="14" />
-    </svg>
-  );
-}
-
-function AreaFillDotsIcon() {
-  return (
-    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      <rect x="1.5" y="3" width="14" height="11" rx="1" />
-      <circle cx="5.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="8.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="11.5" cy="6.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="5.5" cy="9.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="8.5" cy="9.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="11.5" cy="9.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="5.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="8.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
-      <circle cx="11.5" cy="12.5" r="1" fill="currentColor" stroke="none" />
+      {/* Pentagon outline */}
+      <polygon points="8.5,2 15,7 12.5,14.5 4.5,14.5 2,7" />
+      {/* Hatch lines clipped roughly inside */}
+      <line x1="5" y1="6" x2="7.5" y2="14.5" />
+      <line x1="8.5" y1="4.5" x2="11" y2="14.5" />
     </svg>
   );
 }
@@ -218,8 +204,13 @@ export default function ToolPanel() {
   const groupSelection      = useProgramStore((s) => s.groupSelection);
   const ungroupSelection    = useProgramStore((s) => s.ungroupSelection);
 
-  const activeTool    = useUIStore((s) => s.activeTool);
-  const setActiveTool = useUIStore((s) => s.setActiveTool);
+  const activeTool             = useUIStore((s) => s.activeTool);
+  const setActiveTool          = useUIStore((s) => s.setActiveTool);
+  const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
+  const setAreaFillEditGroupId = useUIStore((s) => s.setAreaFillEditGroupId);
+
+  const toolPanelRef = useRef<HTMLDivElement>(null);
+  const anchorRect   = useAnchorRect(toolPanelRef as React.RefObject<HTMLElement>);
 
   const [groupPromptOpen, setGroupPromptOpen] = useState(false);
 
@@ -227,13 +218,13 @@ export default function ToolPanel() {
 
   const canEdit = Boolean(program && selectedPatternName !== null);
 
-  const { selectedLineCount, hasConnectedPair, hasSelectedGroup } =
+  const { selectedLineCount, hasConnectedPair, hasSelectedGroup, selectedGroup } =
     React.useMemo(() => {
       if (!canEdit || !program || selectedPatternName === null) {
-        return { selectedLineCount: 0, hasConnectedPair: false, hasSelectedGroup: false };
+        return { selectedLineCount: 0, hasConnectedPair: false, hasSelectedGroup: false, selectedGroup: null };
       }
       const pattern = program.patterns.find((p) => p.name === selectedPatternName);
-      if (!pattern) return { selectedLineCount: 0, hasConnectedPair: false, hasSelectedGroup: false };
+      if (!pattern) return { selectedLineCount: 0, hasConnectedPair: false, hasSelectedGroup: false, selectedGroup: null };
       const patternCmds = pattern.commands;
 
       // Collect selected Lines in document order
@@ -258,11 +249,16 @@ export default function ToolPanel() {
         }
       }
 
-      const hasGroup = patternCmds.some(
+      const selectedGroupCmd = patternCmds.find(
         (c) => c.kind === 'Group' && c.id && selectedCommandIds.has(c.id),
-      );
+      ) as import('@lib/types').GroupNode | undefined;
 
-      return { selectedLineCount: lines.length, hasConnectedPair: hasConnected, hasSelectedGroup: hasGroup };
+      return {
+        selectedLineCount: lines.length,
+        hasConnectedPair: hasConnected,
+        hasSelectedGroup: Boolean(selectedGroupCmd),
+        selectedGroup: selectedGroupCmd ?? null,
+      };
     }, [canEdit, program, selectedPatternName, selectedCommandIds]);
 
   const canMerge      = canEdit && selectedLineCount === 2;
@@ -272,9 +268,18 @@ export default function ToolPanel() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const toggleTool = useCallback((tool: 'new-line' | 'new-dot') => {
-    setActiveTool(activeTool === tool ? null : tool);
-  }, [activeTool, setActiveTool]);
+  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill') => {
+    if (activeTool === tool) {
+      setActiveTool(null);
+      if (tool === 'area-fill') clearAreaFill();
+    } else {
+      if (activeTool === 'area-fill') clearAreaFill();
+      if (tool === 'area-fill' && selectedGroup?.id) {
+        setAreaFillEditGroupId(selectedGroup.id);
+      }
+      setActiveTool(tool);
+    }
+  }, [activeTool, setActiveTool, clearAreaFill, setAreaFillEditGroupId, selectedGroup]);
 
   const handleGroupConfirm = useCallback((name: string) => {
     groupSelection(name);
@@ -294,7 +299,9 @@ export default function ToolPanel() {
   // ── Render ──────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col items-center py-1 bg-gray-750 border-x border-gray-700 shrink-0 overflow-visible"
+    <div
+      ref={toolPanelRef}
+      className="flex flex-col items-center py-1 bg-gray-750 border-x border-gray-700 shrink-0 overflow-visible"
       style={{ width: 40, background: '#1e2433' }}
     >
       <ToolButton
@@ -336,14 +343,11 @@ export default function ToolPanel() {
       <Divider />
 
       <ToolButton
-        icon={<AreaFillLinesIcon />}
-        label="Area Fill — Lines (coming soon)"
-        disabled
-      />
-      <ToolButton
-        icon={<AreaFillDotsIcon />}
-        label="Area Fill — Dots (coming soon)"
-        disabled
+        icon={<AreaFillIcon />}
+        label="Area Fill — draw polygon"
+        active={activeTool === 'area-fill'}
+        disabled={!canEdit}
+        onClick={() => toggleTool('area-fill')}
       />
 
       <Divider />
@@ -370,6 +374,13 @@ export default function ToolPanel() {
         disabled={!canUngroup}
         onClick={ungroupSelection}
       />
+
+      {activeTool === 'area-fill' && anchorRect && (
+        <AreaFillPanel
+          anchorRect={anchorRect}
+          onCancel={() => { setActiveTool(null); clearAreaFill(); }}
+        />
+      )}
     </div>
   );
 }

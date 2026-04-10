@@ -238,10 +238,7 @@ export function drawHandles(
       ctx.stroke();
 
     } else {
-      // Dot — circle outline, transparent fill
-      ctx.beginPath();
-      ctx.arc(sx, sy, 6, 0, Math.PI * 2);
-      ctx.stroke();
+      // Dot — selection ring already drawn by drawDot(); nothing extra needed here.
     }
 
     ctx.restore();

@@ -90,18 +90,20 @@ export function drawDot(
 ) {
   const color = valveColor(cmd.valve);
   const [sx, sy] = worldToScreen(cmd.point[0], cmd.point[1], cam);
-  const r = Math.max(3, Math.min(10, cam.zoom * 1.2));
+  // World-space radius of 1 unit — scales with zoom exactly like line geometry.
+  const r = cam.zoom * 1.0;
 
   ctx.save();
 
-  ctx.fillStyle = selected ? '#ffffff' : color;
   ctx.beginPath();
   ctx.arc(sx, sy, r, 0, Math.PI * 2);
+  ctx.fillStyle = color;
   ctx.fill();
 
   if (selected) {
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.5;
+    // White ring around the outside, keeping the valve color visible in the center
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
     ctx.stroke();
   }
 

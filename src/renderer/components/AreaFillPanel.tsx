@@ -18,6 +18,7 @@ import { useUIStore } from '../store/ui-store';
 import { useProgramStore, genId } from '../store/program-store';
 import { generateAreaFill, type AreaFillConfig } from '@lib/area-fill';
 import type { CommentCommand, GroupNode, PatternCommand } from '@lib/types';
+import { extractDefaultZ } from './visualization/renderers';
 
 // ── Area fill config comment — persisted inside the group in the .prg file ────
 // Format stored as a CommentCommand with text: "##AREA_FILL_CONFIG:..."
@@ -312,13 +313,27 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
     ) as import('@lib/types').GroupNode | null ?? null;
   }, [areaFillEditGroupId, program, selectedPatternName]);
 
+  // Default Z from the first Mark command in the current pattern (20B)
+  const patternCommands = React.useMemo(() => {
+    if (!program || !selectedPatternName) return [];
+    return program.patterns.find((p) => p.name === selectedPatternName)?.commands ?? [];
+  }, [program, selectedPatternName]);
+  const defaultZ = React.useMemo(() => extractDefaultZ(patternCommands) ?? 0, [patternCommands]);
+
   const [config, setConfig] = useState<PanelConfig>(() => {
-    // Will be updated via useEffect when editGroup is available
-    return DEFAULT_CONFIG;
+    // Will be updated via useEffect when editGroup is available.
+    // For new fills, seed zHeight from Mark commands.
+    return { ...DEFAULT_CONFIG, zHeight: 0 }; // defaultZ not available at init; set via effect below
   });
 
   const setAreaFillPolygon = useUIStore((s) => s.setAreaFillPolygon);
   const setAreaFillClosed  = useUIStore((s) => s.setAreaFillClosed);
+
+  // Seed zHeight from Mark commands when creating a new fill (not editing an existing one)
+  useEffect(() => {
+    if (editGroup) return; // editing — let the editGroup effect handle config
+    setConfig((prev) => ({ ...prev, zHeight: defaultZ }));
+  }, [editGroup, defaultZ]);
 
   // Restore polygon + full config when opening in edit mode
   useEffect(() => {

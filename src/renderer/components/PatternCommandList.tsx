@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { PatternCommand, LineCommand, GroupNode } from '@lib/types';
+import type { PatternCommand, LineCommand, GroupNode, CommentCommand } from '@lib/types';
 import { serializePatternCommand } from '@lib/serializer';
 import { valveColor } from './visualization/renderers';
+import { useUIStore } from '../store/ui-store';
+import { useProgramStore } from '../store/program-store';
 import {
   DndContext,
   DragEndEvent,
@@ -53,45 +55,62 @@ interface FlatItem {
   groupCollapsed: boolean;
   chainPos: ChainPos;
   chainColor: string;
+  /** True for synthetic ##GROUP/##ENDGROUP rows and for ## comment children — read-only, non-draggable. */
+  isMetadata: boolean;
 }
 
 // ── Flat-item builder ─────────────────────────────────────────────────────────
 
-function buildFlatItems(
+function buildFlatItemsInner(
   commands: PatternCommand[],
-  collapsedGroups: Set<string>,
-): FlatItem[] {
-  const items: FlatItem[] = [];
-
+  expandedGroups: Set<string>,
+  depth: number,
+  keyPrefix: string,
+  items: FlatItem[],
+): void {
   for (let i = 0; i < commands.length; i++) {
     const cmd = commands[i];
-    const baseKey = String(i);
+    const baseKey = keyPrefix ? `${keyPrefix}-${i}` : String(i);
 
     if (cmd.kind === 'Group') {
-      const collapsed = collapsedGroups.has(baseKey);
+      const collapsed = !expandedGroups.has(baseKey);
       items.push({
-        key: baseKey, cmdId: cmd.id, cmd, depth: 0,
+        key: baseKey, cmdId: cmd.id, cmd, depth,
         isGroupHeader: true, groupCollapsed: collapsed,
-        chainPos: null, chainColor: '',
+        chainPos: null, chainColor: '', isMetadata: false,
       });
       if (!collapsed) {
-        for (let j = 0; j < cmd.commands.length; j++) {
-          const child = cmd.commands[j];
-          items.push({
-            key: `${i}-${j}`, cmdId: child.id, cmd: child,
-            depth: 1, isGroupHeader: false, groupCollapsed: false,
-            chainPos: null, chainColor: '',
-          });
-        }
+        items.push({
+          key: `${baseKey}-meta-open`, cmdId: undefined,
+          cmd: { kind: 'Comment', text: `##GROUP:${cmd.name}` } as CommentCommand,
+          depth: depth + 1, isGroupHeader: false, groupCollapsed: false,
+          chainPos: null, chainColor: '', isMetadata: true,
+        });
+        buildFlatItemsInner(cmd.commands, expandedGroups, depth + 1, baseKey, items);
+        items.push({
+          key: `${baseKey}-meta-close`, cmdId: undefined,
+          cmd: { kind: 'Comment', text: `##ENDGROUP:${cmd.name}` } as CommentCommand,
+          depth: depth + 1, isGroupHeader: false, groupCollapsed: false,
+          chainPos: null, chainColor: '', isMetadata: true,
+        });
       }
     } else {
+      const isChildMetadata = cmd.kind === 'Comment' && (cmd as CommentCommand).text.startsWith('##');
       items.push({
-        key: baseKey, cmdId: cmd.id, cmd, depth: 0,
+        key: baseKey, cmdId: cmd.id, cmd, depth,
         isGroupHeader: false, groupCollapsed: false,
-        chainPos: null, chainColor: '',
+        chainPos: null, chainColor: '', isMetadata: isChildMetadata,
       });
     }
   }
+}
+
+function buildFlatItems(
+  commands: PatternCommand[],
+  expandedGroups: Set<string>,
+): FlatItem[] {
+  const items: FlatItem[] = [];
+  buildFlatItemsInner(commands, expandedGroups, 0, '', items);
 
   // Annotate chain positions: runs of consecutive connected Line items at the same depth
   for (let i = 0; i < items.length; ) {
@@ -189,6 +208,9 @@ interface PatternCommandListProps {
   onClear: () => void;
   onContextMenu?: (e: React.MouseEvent, cmdId: string | undefined) => void;
   onReorder?: (draggedIds: string[], insertBeforeId: string | null, targetGroupId: string | null) => void;
+  /** Keys of groups the user has explicitly expanded. Managed by the parent so state survives pattern switching. */
+  expandedGroups: Set<string>;
+  setExpandedGroups: (updater: (prev: Set<string>) => Set<string>) => void;
 }
 
 export default function PatternCommandList({
@@ -199,12 +221,74 @@ export default function PatternCommandList({
   onClear,
   onContextMenu,
   onReorder,
+  expandedGroups,
+  setExpandedGroups,
 }: PatternCommandListProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   const [shiftHeld, setShiftHeld] = useState(false);
   const [hoverKey, setHoverKey] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+
+  const renamingGroupId    = useUIStore((s) => s.renamingGroupId);
+  const setRenamingGroupId = useUIStore((s) => s.setRenamingGroupId);
+  const renameGroup        = useProgramStore((s) => s.renameGroup);
+
+  const searchQuery         = useUIStore((s) => s.searchQuery);
+  const searchMatchList     = useUIStore((s) => s.searchMatchList);
+  const searchFocusedIdx    = useUIStore((s) => s.searchFocusedIdx);
+  const selectedPatternName = useProgramStore((s) => s.selectedPatternName);
+
+  // IDs that match in the currently displayed pattern
+  const searchMatchIds = useMemo<Set<string> | null>(() => {
+    if (!searchQuery.trim()) return null;
+    return new Set(
+      searchMatchList
+        .filter((m) => m.patternName === null || m.patternName === selectedPatternName)
+        .map((m) => m.id),
+    );
+  }, [searchQuery, searchMatchList, selectedPatternName]);
+
+  // Group IDs whose subtree contains at least one match (used to avoid dimming group headers)
+  const groupsWithChildMatches = useMemo<Set<string>>(() => {
+    if (!searchMatchIds || searchMatchIds.size === 0) return new Set();
+    const result = new Set<string>();
+    function check(cmds: PatternCommand[]): boolean {
+      let any = false;
+      for (const c of cmds) {
+        const self = Boolean(c.id && searchMatchIds!.has(c.id));
+        if (c.kind === 'Group') {
+          const childHit = check(c.commands);
+          if ((self || childHit) && c.id) result.add(c.id);
+          if (self || childHit) any = true;
+        } else if (self) {
+          any = true;
+        }
+      }
+      return any;
+    }
+    check(commands);
+    return result;
+  }, [searchMatchIds, commands]);
+
+  const searchFocusedId = searchMatchList[searchFocusedIdx]?.id ?? null;
+
+  // When rename mode activates, seed the input with the current group name
+  useEffect(() => {
+    if (renamingGroupId === null) return;
+    function findGroup(cmds: PatternCommand[]): GroupNode | null {
+      for (const c of cmds) {
+        if (c.kind === 'Group') {
+          if (c.id === renamingGroupId) return c;
+          const inner = findGroup(c.commands);
+          if (inner) return inner;
+        }
+      }
+      return null;
+    }
+    const group = findGroup(commands);
+    if (group) setRenameValue(group.name);
+  }, [renamingGroupId, commands]);
 
   // ── DnD state ──────────────────────────────────────────────────────────────
   const [dragActiveId, setDragActiveId] = useState<UniqueIdentifier | null>(null);
@@ -224,11 +308,14 @@ export default function PatternCommandList({
   }, []);
 
   const items = useMemo(
-    () => buildFlatItems(commands, collapsedGroups),
-    [commands, collapsedGroups],
+    () => buildFlatItems(commands, expandedGroups),
+    [commands, expandedGroups],
   );
 
-  const sortableIds = useMemo(() => items.map((it) => it.key), [items]);
+  const sortableIds = useMemo(
+    () => items.filter((it) => !it.isMetadata && it.depth <= 1).map((it) => it.key),
+    [items],
+  );
 
   // All IDs in the current visible order (for range selection)
   const allVisibleIds = useMemo(
@@ -257,12 +344,47 @@ export default function PatternCommandList({
     el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }, [selectedCommandIds, items]);
 
+  // Auto-expand group containing the focused search match, then scroll it into view
+  useEffect(() => {
+    if (!searchFocusedId) return;
+    // Recursively find all ancestor group keys for the focused command
+    function findAncestorKeys(cmds: PatternCommand[], targetId: string, prefix: string): string[] | null {
+      for (let i = 0; i < cmds.length; i++) {
+        const c = cmds[i];
+        const key = prefix ? `${prefix}-${i}` : String(i);
+        if (c.id === targetId) return [];
+        if (c.kind === 'Group') {
+          const inner = findAncestorKeys(c.commands, targetId, key);
+          if (inner !== null) return [key, ...inner];
+        }
+      }
+      return null;
+    }
+    const ancestorKeys = findAncestorKeys(commands, searchFocusedId, '');
+    if (ancestorKeys && ancestorKeys.length > 0) {
+      setExpandedGroups((prev) => {
+        const toExpand = ancestorKeys.filter((k) => !prev.has(k));
+        if (toExpand.length === 0) return prev;
+        const next = new Set(prev);
+        toExpand.forEach((k) => next.add(k));
+        return next;
+      });
+    }
+    // Scroll after a tick so the DOM has updated after any expand
+    const t = setTimeout(() => {
+      if (!containerRef.current) return;
+      const el = containerRef.current.querySelector<HTMLElement>(`[data-id="${searchFocusedId}"]`);
+      el?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 50);
+    return () => clearTimeout(t);
+  }, [searchFocusedId, commands]);
+
   const handleExpandToggle = useCallback((key: string) => {
     setExpandedKey((prev) => (prev === key ? null : key));
   }, []);
 
   const handleGroupToggle = useCallback((key: string) => {
-    setCollapsedGroups((prev) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
@@ -384,15 +506,53 @@ export default function PatternCommandList({
             const showTopIndicator    = dragOverIdx !== -1 && dragOverIdx === idx && !isDraggingDown;
             const showBottomIndicator = dragOverIdx !== -1 && dragOverIdx === idx && isDraggingDown;
 
+            const isSearchActive = searchMatchIds !== null;
+            const isMatch   = isSearchActive && Boolean(cmdId && searchMatchIds!.has(cmdId));
+            const isFocused = isSearchActive && cmdId === searchFocusedId;
+            // A group header is not dimmed if it or any descendant matches
+            const notDimmed = !isSearchActive || isMatch || isFocused
+              || Boolean(cmdId && groupsWithChildMatches.has(cmdId));
+
             const rowBg = isSelected
               ? 'bg-blue-600/40'
+              : isFocused
+              ? 'bg-amber-400/30'
+              : isMatch
+              ? 'bg-amber-400/10'
               : isPreview
               ? 'bg-blue-500/15'
               : 'hover:bg-gray-700/50';
+            const dimStyle: React.CSSProperties = notDimmed ? {} : { opacity: 0.35 };
+
+            // ── Metadata row (##GROUP:, ##ENDGROUP:, ##AREA_FILL_CONFIG:, etc.) ──
+            if (item.isMetadata) {
+              const metaText = item.cmd.kind === 'Comment' ? (item.cmd as CommentCommand).text : '';
+              return (
+                <div
+                  key={item.key}
+                  style={{ paddingLeft: indent }}
+                  className="flex items-center gap-1.5 pr-2 py-[2px] pointer-events-none select-none"
+                >
+                  <div style={{ width: 16, flexShrink: 0 }} />
+                  <span className="font-mono text-[9px] italic text-gray-600 opacity-60 truncate flex-1 min-w-0">
+                    {metaText}
+                  </span>
+                  <span className="shrink-0 text-[8px] font-sans not-italic text-gray-700 bg-gray-800/60 border border-gray-700/50 rounded px-1 leading-none py-0.5">
+                    meta
+                  </span>
+                </div>
+              );
+            }
 
             // ── Group header ────────────────────────────────────────────────
             if (item.isGroupHeader) {
               const group = item.cmd as GroupNode;
+              // Depth-based left-border colours for nested groups
+              const nestBorderColor = [
+                'border-blue-500/60',
+                'border-violet-500/60',
+                'border-amber-500/60',
+              ][(item.depth - 1) % 3];
               return (
                 <SortableRow
                   key={item.key}
@@ -400,27 +560,73 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div
-                    data-id={cmdId}
-                    onClick={(e) => {
-                      if (cmdId) handleRowClick(e, cmdId);
-                      handleGroupToggle(item.key);
-                    }}
-                    onContextMenu={(e) => {
-                      if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
-                      onContextMenu?.(e, cmdId);
-                    }}
-                    onMouseEnter={() => setHoverKey(item.key)}
-                    onMouseLeave={() => setHoverKey(null)}
-                    className={`flex items-center gap-1.5 px-2 py-[3px] cursor-pointer rounded-sm text-xs ${rowBg}`}
-                  >
-                    <span className="text-gray-400 w-3 shrink-0 text-center">
-                      {item.groupCollapsed ? '▸' : '▾'}
-                    </span>
-                    <span className="text-gray-100 font-bold">{group.name}</span>
-                    <span className="text-gray-500 ml-1">
-                      ({group.commands.length} command{group.commands.length !== 1 ? 's' : ''})
-                    </span>
+                  <div style={{ paddingLeft: indent }}>
+                    <div
+                      data-id={cmdId}
+                      style={dimStyle}
+                      onClick={(e) => {
+                        if (renamingGroupId === cmdId) return;
+                        if (cmdId) handleRowClick(e, cmdId);
+                      }}
+                      onDoubleClick={(e) => {
+                        if (renamingGroupId === cmdId) return;
+                        e.preventDefault();
+                        handleGroupToggle(item.key);
+                      }}
+                      onContextMenu={(e) => {
+                        if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
+                        onContextMenu?.(e, cmdId);
+                      }}
+                      onMouseEnter={() => setHoverKey(item.key)}
+                      onMouseLeave={() => setHoverKey(null)}
+                      className={[
+                        'flex items-center gap-1.5 pr-2 py-[3px] cursor-pointer rounded-sm text-xs',
+                        item.depth > 0
+                          ? `pl-2 border-l-2 ${nestBorderColor}`
+                          : 'px-2',
+                        rowBg,
+                        isFocused ? 'ring-1 ring-amber-400/60 ring-inset' : '',
+                      ].filter(Boolean).join(' ')}
+                    >
+                      <span
+                        onClick={(e) => { e.stopPropagation(); handleGroupToggle(item.key); }}
+                        className="text-gray-400 w-3 shrink-0 text-center"
+                      >
+                        {item.groupCollapsed ? '▸' : '▾'}
+                      </span>
+                    {renamingGroupId === cmdId ? (
+                      <input
+                        autoFocus
+                        value={renameValue}
+                        onChange={(e) => setRenameValue(e.target.value)}
+                        onFocus={(e) => e.target.select()}
+                        onClick={(e) => e.stopPropagation()}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            const name = renameValue.trim();
+                            if (name && cmdId) renameGroup(cmdId, name);
+                            setRenamingGroupId(null);
+                          } else if (e.key === 'Escape') {
+                            setRenamingGroupId(null);
+                          }
+                          e.stopPropagation();
+                        }}
+                        onBlur={() => {
+                          const name = renameValue.trim();
+                          if (name && cmdId) renameGroup(cmdId, name);
+                          setRenamingGroupId(null);
+                        }}
+                        className="bg-gray-800 border border-blue-500 rounded px-1 py-0 text-xs text-gray-100 font-bold outline-none min-w-0 flex-1"
+                      />
+                    ) : (
+                      <span className="text-gray-100 font-bold">{group.name}</span>
+                    )}
+                    {renamingGroupId !== cmdId && (
+                      <span className="text-gray-500 ml-1">
+                        ({group.commands.length} command{group.commands.length !== 1 ? 's' : ''})
+                      </span>
+                    )}
+                    </div>
                   </div>
                 </SortableRow>
               );
@@ -442,10 +648,11 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div style={{ paddingLeft: indent }}>
+                  <div style={{ paddingLeft: indent, ...dimStyle }}>
                     <div
                       data-id={cmdId}
                       onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
+                      onDoubleClick={(e) => { e.preventDefault(); handleExpandToggle(item.key); }}
                       onContextMenu={(e) => {
                         if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
                         onContextMenu?.(e, cmdId);
@@ -456,6 +663,7 @@ export default function PatternCommandList({
                         'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
                         rowBg,
                         cmd.disabled ? 'opacity-50' : '',
+                        isFocused ? 'ring-1 ring-amber-400/60 ring-inset' : '',
                       ].join(' ')}
                     >
                       <ChainConnector pos={item.chainPos} color={item.chainColor} />
@@ -505,7 +713,7 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div style={{ paddingLeft: indent }}>
+                  <div style={{ paddingLeft: indent, ...dimStyle }}>
                     <div
                       data-id={cmdId}
                       onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
@@ -519,6 +727,7 @@ export default function PatternCommandList({
                         'flex items-center gap-1 pr-2 py-[3px] cursor-pointer rounded-sm',
                         rowBg,
                         cmd.disabled ? 'opacity-50' : '',
+                        isFocused ? 'ring-1 ring-amber-400/60 ring-inset' : '',
                       ].join(' ')}
                     >
                       <div style={{ width: 16, flexShrink: 0 }} />
@@ -544,7 +753,7 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div style={{ paddingLeft: indent }}>
+                  <div style={{ paddingLeft: indent, ...dimStyle }}>
                     <div
                       data-id={cmdId}
                       onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
@@ -552,7 +761,7 @@ export default function PatternCommandList({
                         if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
                         onContextMenu?.(e, cmdId);
                       }}
-                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}${isFocused ? ' ring-1 ring-amber-400/60 ring-inset' : ''}`}
                     >
                       <div style={{ width: 16, flexShrink: 0 }} />
                       <span className="font-mono text-[10px] text-green-500 truncate">
@@ -574,7 +783,7 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div style={{ paddingLeft: indent }}>
+                  <div style={{ paddingLeft: indent, ...dimStyle }}>
                     <div
                       data-id={cmdId}
                       onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
@@ -582,7 +791,7 @@ export default function PatternCommandList({
                         if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
                         onContextMenu?.(e, cmdId);
                       }}
-                      className={`flex items-center gap-1.5 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                      className={`flex items-center gap-1.5 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}${isFocused ? ' ring-1 ring-amber-400/60 ring-inset' : ''}`}
                     >
                       <div style={{ width: 16, flexShrink: 0 }} />
                       <span className="font-mono text-[10px] text-gray-500 shrink-0">{cmd.kind}</span>
@@ -603,7 +812,7 @@ export default function PatternCommandList({
                   showTopIndicator={showTopIndicator}
                   showBottomIndicator={showBottomIndicator}
                 >
-                  <div style={{ paddingLeft: indent }}>
+                  <div style={{ paddingLeft: indent, ...dimStyle }}>
                     <div
                       data-id={cmdId}
                       onClick={(e) => { if (cmdId) handleRowClick(e, cmdId); }}
@@ -611,7 +820,7 @@ export default function PatternCommandList({
                         if (cmdId && !selectedCommandIds.has(cmdId)) onSelect(cmdId, 'single', allVisibleIds);
                         onContextMenu?.(e, cmdId);
                       }}
-                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}`}
+                      className={`flex items-center gap-1 pr-2 py-[3px] rounded-sm cursor-pointer ${rowBg}${isFocused ? ' ring-1 ring-amber-400/60 ring-inset' : ''}`}
                     >
                       <div style={{ width: 16, flexShrink: 0 }} />
                       <span className="font-mono text-[10px] text-gray-600 italic truncate">{preview}</span>

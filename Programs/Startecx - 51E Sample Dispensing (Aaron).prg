@@ -1,0 +1,690 @@
+.Main
+Station A:
+Comment:Metal
+DO:METAPOR - STANDARD - ORDER 2 AT(338.636,356.439,46.379)Single A
+EndStation A
+Station B:
+EndStation B
+Station C:
+EndStation C
+Station D:
+EndStation D
+.EndMain
+.PattList
+.Patt:METAPOR - STANDARD - ORDER 2
+Laser:1 AT(269.732,356.456,46.036)
+Mark:1,(338.641,356.444,46.379)-(181.962,356.669,46.379)Two
+Comment:##GROUP:Area Fill
+Comment:##AREA_FILL_CONFIG:polygon=248.19764926482478,332.5301346267885;248.86372369105345,322.4132723858528;249.77984026374958,319.518344016133;251.94187537531246,316.22032435442696;252.7114132963772,315.45078643336217;250.28895183996562,332.3776854184163|fillType=lines|xSpacing=0.3|ySpacing=0.3|zHeight=46|rotationDeg=277|param=2|startCorner=BR|flowRate=0.5
+Line:2,(248.549,327.435,46.000),ValveOn
+Line:2,(249.354,320.884,46.000),ValveOff,0.5000 mg/mm
+Line:2,(249.798,319.730,46.000),ValveOn
+Line:2,(248.262,332.236,46.000),ValveOff,0.5000 mg/mm
+Line:2,(248.560,332.272,46.000),ValveOn
+Line:2,(250.205,318.873,46.000),ValveOff,0.5000 mg/mm
+Line:2,(250.576,318.314,46.000),ValveOn
+Line:2,(248.858,332.309,46.000),ValveOff,0.5000 mg/mm
+Line:2,(249.155,332.345,46.000),ValveOn
+Line:2,(250.947,317.755,46.000),ValveOff,0.5000 mg/mm
+Line:2,(251.318,317.196,46.000),ValveOn
+Line:2,(249.453,332.382,46.000),ValveOff,0.5000 mg/mm
+Line:2,(249.788,332.121,46.000),ValveOn
+Line:2,(251.689,316.637,46.000),ValveOff,0.5000 mg/mm
+Line:2,(252.023,316.376,46.000),ValveOn
+Line:2,(250.085,332.157,46.000),ValveOff,0.5000 mg/mm
+Line:2,(250.822,328.621,46.000),ValveOn
+Line:2,(252.394,315.817,46.000),ValveOff,0.5000 mg/mm
+Comment:##ENDGROUP:Area Fill
+Line:1,(252.369,316.016,46.000),ValveOn
+Line:1,(252.826,315.751,0.000),ValveOff,0.5000 mg/mm
+Line:1,(252.826,315.751,0.000),ValveOn
+Line:1,(253.753,315.772,0.000),ValveOff,0.5000 mg/mm
+Line:1,(253.753,315.772,0.000),ValveOn
+Line:1,(255.690,314.099,0.000),ValveOff,0.5000 mg/mm
+Line:1,(255.690,314.099,0.000),ValveOn
+Line:1,(259.287,312.756,0.000),ValveOff,0.5000 mg/mm
+Line:1,(259.287,312.756,0.000),ValveOn
+Line:1,(261.362,312.823,0.000),ValveOff,0.5000 mg/mm
+Line:1,(261.362,312.823,0.000),ValveOn
+Line:1,(264.535,313.980,0.000),ValveOff,0.5000 mg/mm
+Line:1,(264.535,313.980,0.000),ValveOn
+Line:1,(266.691,315.593,0.000),ValveOff,0.5000 mg/mm
+Line:1,(266.691,315.593,0.000),ValveOn
+Line:1,(270.003,315.733,0.000),ValveOff,0.5000 mg/mm
+Line:1,(270.003,315.733,0.000),ValveOn
+Line:1,(272.066,316.780,0.000),ValveOff,0.5000 mg/mm
+Line:1,(272.066,316.780,0.000),ValveOn
+Line:1,(273.998,316.965,0.000),ValveOff,0.5000 mg/mm
+Line:1,(273.998,316.965,0.000),ValveOn
+Line:1,(280.090,322.669,0.000),ValveOff,0.5000 mg/mm
+.End
+.Patt:METAPOR - STANDARD - ORDER 2 Heavy
+Laser:1 AT(269.732,356.456,46.036)
+Mark:1,(338.641,356.444,46.379)-(181.962,356.669,46.379)Two
+Comment:
+Comment:
+Comment:PATTERN START
+Comment:- LEFT 1 - LARGE FILL
+Line:2,(249.018,327.041,46.421),ValveOn
+Line:2,(249.821,320.698,46.419),ValveOff,0.550 mg/mm
+Line:2,(250.481,319.479,46.417),ValveOn
+Line:2,(248.855,331.724,46.412),ValveOff,0.550 mg/mm
+Line:2,(249.299,331.754,46.414),ValveOn
+Line:2,(251.267,318.054,47.112),ValveOff,0.550 mg/mm
+Line:2,(251.866,317.489,46.411),ValveOn
+Line:2,(249.825,331.779,46.412),ValveOff,0.550 mg/mm
+Line:2,(250.189,331.744,47.114),ValveOn
+Line:2,(252.354,316.371,47.110),ValveOff,0.550 mg/mm
+Line:2,(252.354,316.371,47.110),ValveOn
+Line:2,(252.763,315.728,47.106),ValveOff,0.550 mg/mm
+Comment:- LEFT 1 - SMALL TRACE
+Line:2,(252.763,315.728,47.106),ValveOn
+Line:2,(253.824,315.695,47.108),ValveOff,0.350 mg/mm
+Comment: line
+Line:2,(253.824,315.695,47.108),ValveOn
+Line:2,(255.677,313.979,47.108),ValveOff,0.350 mg/mm
+Line:2,(255.677,313.979,47.108),ValveOn
+Line:2,(258.120,312.932,47.108),ValveOff,0.350 mg/mm
+Line:2,(258.120,312.932,47.108),ValveOn
+Line:2,(260.232,312.518,47.108),ValveOff,0.350 mg/mm
+Line:2,(260.232,312.518,47.108),ValveOn
+Line:2,(264.684,313.937,47.108),ValveOff,0.350 mg/mm
+Line:2,(264.684,313.937,47.108),ValveOn
+Line:2,(266.643,315.578,47.108),ValveOff,0.350 mg/mm
+Comment: arc 
+Disable:Arc:3,(253.824,315.695,47.108),ValveOn
+Disable:ArcMid:3,(257.142,313.456,47.108),ValveOn
+Disable:Arc:3,(260.188,312.740,47.108),ValveOff
+Disable:Arc:3,(260.188,312.740,47.108),ValveOn
+Disable:ArcMid:3,(263.917,313.855,47.108),ValveOn
+Disable:Arc:3,(266.644,315.703,47.108),ValveOff
+Comment: arc 
+Line:2,(266.643,315.578,47.108),ValveOn
+Line:2,(269.962,315.735,47.103),ValveOff,0.350 mg/mm
+Line:2,(269.962,315.735,47.103),ValveOn
+Line:2,(271.753,316.877,47.104),ValveOff,0.350 mg/mm
+Line:2,(271.753,316.877,47.104),ValveOn
+Line:2,(274.201,317.016,47.046),ValveOff,0.350 mg/mm
+Line:2,(274.201,317.016,47.046),ValveOn
+Line:2,(279.774,322.525,47.107),ValveOff,0.350 mg/mm
+Line:2,(279.774,322.525,47.107),ValveOn
+Line:2,(280.129,322.870,47.102),ValveOff,0.650 mg/mm
+Dot:1,(280.129,322.870,47.102),ValveOn
+Comment:
+Comment:- LEFT 2 - LARGE FILL
+Line:2,(251.808,331.676,46.404),ValveOn
+Line:2,(253.820,317.124,46.404),ValveOff,0.550 mg/mm
+Line:2,(254.189,317.054,47.092),ValveOn
+Line:2,(252.464,331.720,47.098),ValveOff,0.550 mg/mm
+Line:2,(253.024,331.672,46.399),ValveOn
+Line:2,(254.524,316.897,46.394),ValveOff,0.550 mg/mm
+Line:2,(254.899,316.869,46.399),ValveOn
+Line:2,(253.583,331.638,46.402),ValveOff,0.550 mg/mm
+Comment:LEFT 2 - SMALL TRACE
+Line:2,(253.583,331.638,46.402),ValveOn
+Line:2,(257.952,330.886,47.094),ValveOff,0.350 mg/mm
+Line:2,(257.952,330.886,47.094),ValveOn
+Line:2,(261.858,330.814,47.094),ValveOff,0.350 mg/mm
+Line:2,(261.858,330.814,47.094),ValveOn
+Line:2,(265.154,331.598,47.094),ValveOff,0.350 mg/mm
+Line:2,(265.154,331.598,47.094),ValveOn
+Line:2,(266.818,332.350,46.396),ValveOff,0.350 mg/mm
+Line:2,(266.818,332.350,46.396),ValveOn
+Line:2,(275.314,332.453,46.392),ValveOff,0.350 mg/mm
+Line:2,(275.314,332.453,46.392),ValveOn
+Line:2,(276.318,332.102,46.392),ValveOff,0.350 mg/mm
+Line:2,(276.318,332.102,46.392),ValveOn
+Line:2,(277.112,331.771,46.392),ValveOff,0.350 mg/mm
+Line:2,(277.112,331.771,46.392),ValveOn
+Line:2,(279.721,329.224,46.391),ValveOff,0.350 mg/mm
+Line:2,(279.721,329.224,46.391),ValveOn
+Line:2,(280.310,328.594,46.389),ValveOff,0.650 mg/mm
+Dot:1,(280.310,328.594,46.389),ValveOn
+Comment:
+Comment:- LEFT 3 - LARGE FILL
+Line:2,(256.170,329.416,47.103),ValveOn
+Line:2,(256.411,316.681,47.102),ValveOff,0.550 mg/mm
+Line:2,(256.678,314.859,47.103),ValveOn
+Line:2,(256.690,329.222,46.406),ValveOff,0.550 mg/mm
+Line:2,(257.231,329.143,46.399),ValveOn
+Line:2,(257.185,314.682,47.096),ValveOff,0.550 mg/mm
+Line:2,(257.714,315.577,47.096),ValveOn
+Line:2,(257.610,327.524,47.093),ValveOff,0.550 mg/mm
+Line:2,(257.610,327.524,47.093),ValveOn
+Line:2,(257.664,327.782,47.094),ValveOff,0.550 mg/mm
+Comment:- LEFT 3 - MID FILL
+Line:2,(257.101,328.457,47.107),ValveOn
+Line:2,(262.292,328.526,47.104),ValveOff,0.550 mg/mm
+Line:2,(262.292,328.526,47.104),ValveOn
+Line:2,(267.076,330.140,47.104),ValveOff,0.550 mg/mm
+Line:2,(267.076,330.140,47.104),ValveOn
+Line:2,(271.756,330.278,46.404),ValveOff,0.550 mg/mm
+Line:2,(271.528,330.654,46.404),ValveOn
+Line:2,(267.186,330.516,46.404),ValveOff,0.550 mg/mm
+Line:2,(266.984,330.502,46.404),ValveOn
+Line:2,(262.556,329.086,47.102),ValveOff,0.550 mg/mm
+Line:2,(262.578,329.062,47.104),ValveOn
+Line:2,(258.276,328.988,46.407),ValveOff,0.550 mg/mm
+Line:2,(258.268,328.966,46.407),ValveOn
+Line:2,(255.812,329.412,46.407),ValveOff,0.550 mg/mm
+Line:2,(257.294,327.852,47.092),ValveOn
+Line:2,(262.428,328.086,47.094),ValveOff,0.550 mg/mm
+Line:2,(262.454,328.094,47.092),ValveOn
+Line:2,(267.468,329.606,47.096),ValveOff,0.550 mg/mm
+Line:2,(267.468,329.606,47.096),ValveOn
+Line:2,(271.872,329.709,47.092),ValveOff,0.550 mg/mm
+Line:2,(257.393,328.026,47.107),ValveOn
+Line:2,(262.707,328.157,47.107),ValveOff,0.550 mg/mm
+Line:1,(257.101,328.786,47.107),ValveOn
+Line:1,(262.896,328.867,47.107),ValveOff,0.550 mg/mm
+Comment:- LEFT 3 - SMALL TRACE
+Line:2,(271.872,330.247,47.092),ValveOn
+Line:2,(276.091,330.082,47.090),ValveOff,0.350 mg/mm
+Line:2,(276.091,330.082,47.090),ValveOn
+Line:2,(277.812,328.669,47.094),ValveOff,0.350 mg/mm
+Line:2,(277.812,328.669,47.094),ValveOn
+Line:2,(278.356,328.120,47.090),ValveOff,0.650 mg/mm
+Dot:1,(278.356,328.120,47.090),ValveOn
+Comment:- LEFT 4 / 1 - MID FILL
+Line:2,(259.194,325.956,47.114),ValveOn
+Line:2,(259.116,324.414,47.114),ValveOff,0.550 mg/mm
+Line:2,(259.218,325.912,46.568),ValveOn
+Line:2,(262.602,326.044,47.102),ValveOff,0.550 mg/mm
+Line:2,(262.602,326.044,47.102),ValveOn
+Line:2,(267.880,327.870,47.126),ValveOff,0.550 mg/mm
+Line:2,(267.880,327.870,47.126),ValveOn
+Line:2,(271.270,327.878,47.120),ValveOff,0.550 mg/mm
+Line:2,(259.218,325.526,46.568),ValveOn
+Line:2,(262.602,325.658,47.102),ValveOff,0.550 mg/mm
+Line:2,(262.602,325.658,47.102),ValveOn
+Line:2,(267.880,327.484,47.126),ValveOff,0.550 mg/mm
+Line:2,(267.880,327.484,47.126),ValveOn
+Line:2,(271.270,327.492,47.120),ValveOff,0.550 mg/mm
+Line:2,(271.680,327.262,47.122),ValveOn
+Line:2,(267.948,327.202,47.114),ValveOff,0.550 mg/mm
+Line:2,(267.948,327.202,47.114),ValveOn
+Comment:
+Line:2,(261.976,324.989,46.412),ValveOff,0.550 mg/mm
+Line:2,(261.976,324.989,46.412),ValveOn
+Line:2,(259.184,325.070,46.408),ValveOff,0.550 mg/mm
+Line:2,(259.216,324.420,46.407),ValveOn
+Line:2,(260.924,324.540,46.402),ValveOff,0.550 mg/mm
+Line:2,(260.924,324.540,46.402),ValveOn
+Line:2,(267.290,326.592,47.100),ValveOff,0.550 mg/mm
+Line:2,(267.290,326.592,47.100),ValveOn
+Line:2,(271.202,326.834,47.098),ValveOff,0.550 mg/mm
+Comment:- LEFT 4 / 1 - SMALL TRACE
+Line:2,(271.173,327.459,46.876),ValveOn
+Line:2,(275.813,327.412,47.090),ValveOff,0.350 mg/mm
+Line:2,(275.813,327.412,47.090),ValveOn
+Line:2,(276.858,326.841,47.090),ValveOff,0.650 mg/mm
+Dot:1,(276.858,326.841,47.090),ValveOn
+Comment:
+Comment:- LEFT 4 / 2 - MID FILL
+Line:2,(259.125,322.346,47.108),ValveOn
+Line:2,(259.101,320.872,47.108),ValveOff,0.550 mg/mm
+Line:2,(259.211,322.286,47.103),ValveOn
+Line:2,(260.960,322.308,46.401),ValveOff,0.550 mg/mm
+Line:2,(260.960,322.308,46.401),ValveOn
+Line:2,(267.671,324.527,46.401),ValveOff,0.550 mg/mm
+Line:2,(267.671,324.527,46.401),ValveOn
+Line:2,(270.989,324.828,46.401),ValveOff,0.550 mg/mm
+Line:2,(270.989,323.875,46.401),ValveOn
+Line:2,(268.260,323.633,46.401),ValveOff,0.550 mg/mm
+Line:2,(268.260,323.633,46.401),ValveOn
+Line:2,(265.349,323.062,47.099),ValveOff,0.550 mg/mm
+Line:2,(265.349,323.062,47.099),ValveOn
+Line:2,(261.221,321.547,47.097),ValveOff,0.550 mg/mm
+Line:2,(261.221,321.547,47.097),ValveOn
+Line:2,(259.375,321.289,46.399),ValveOff,0.550 mg/mm
+Line:2,(270.989,324.319,46.401),ValveOn
+Line:2,(268.260,324.077,46.401),ValveOff,0.550 mg/mm
+Line:2,(268.260,324.077,46.401),ValveOn
+Line:2,(265.349,323.506,47.099),ValveOff,0.550 mg/mm
+Line:2,(265.349,323.506,47.099),ValveOn
+Line:2,(261.221,321.991,47.097),ValveOff,0.550 mg/mm
+Line:2,(261.221,321.991,47.097),ValveOn
+Line:2,(259.375,321.733,46.399),ValveOff,0.550 mg/mm
+Line:2,(258.972,320.905,47.100),ValveOn
+Line:2,(260.671,320.765,47.097),ValveOff,0.550 mg/mm
+Line:2,(260.671,320.765,47.097),ValveOn
+Line:2,(265.161,322.729,47.097),ValveOff,0.550 mg/mm
+Line:2,(265.161,322.729,47.097),ValveOn
+Line:2,(270.867,323.607,47.099),ValveOff,0.550 mg/mm
+Comment:- LEFT 4 / 2 - SMALL TRACE
+Line:2,(270.620,324.044,46.402),ValveOn
+Line:2,(272.609,324.457,47.096),ValveOff,0.350 mg/mm
+Line:2,(272.609,324.457,47.096),ValveOn
+Line:2,(274.039,325.549,46.400),ValveOff,0.350 mg/mm
+Line:2,(274.039,325.549,46.400),ValveOn
+Line:2,(275.211,325.825,47.096),ValveOff,0.650 mg/mm
+Dot:1,(275.211,325.825,47.096),ValveOn
+Comment:
+Comment:- LEFT 4 / 3 - MID FILL
+Line:2,(259.133,318.936,47.108),ValveOn
+Line:2,(259.161,317.260,47.107),ValveOff,0.550 mg/mm
+Line:2,(259.161,317.260,47.107),ValveOn
+Line:2,(261.294,317.470,47.101),ValveOff,0.550 mg/mm
+Line:2,(261.294,317.470,47.101),ValveOn
+Line:2,(263.963,319.384,47.103),ValveOff,0.550 mg/mm
+Line:2,(263.963,319.384,47.103),ValveOn
+Line:2,(270.128,320.350,47.101),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(270.559,320.899,46.403),ValveOn
+Line:2,(267.077,320.349,46.403),ValveOff,0.550 mg/mm
+Line:2,(267.077,320.349,46.403),ValveOn
+Line:2,(264.186,319.693,46.403),ValveOff,0.550 mg/mm
+Line:2,(264.186,319.693,46.403),ValveOn
+Line:2,(261.324,317.974,46.403),ValveOff,0.550 mg/mm
+Line:2,(261.324,317.974,46.403),ValveOn
+Line:2,(258.941,317.898,46.402),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(270.559,321.286,46.403),ValveOn
+Line:2,(267.077,320.736,46.403),ValveOff,0.550 mg/mm
+Line:2,(267.077,320.736,46.403),ValveOn
+Line:2,(264.186,320.080,46.403),ValveOff,0.550 mg/mm
+Line:2,(264.186,320.080,46.403),ValveOn
+Line:2,(261.324,318.361,46.403),ValveOff,0.550 mg/mm
+Line:2,(261.324,318.361,46.403),ValveOn
+Line:2,(258.941,318.285,46.402),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(259.133,318.820,46.404),ValveOn
+Line:2,(260.943,318.835,46.401),ValveOff,0.550 mg/mm
+Line:2,(260.943,318.835,46.401),ValveOn
+Line:2,(265.781,320.853,46.364),ValveOff,0.550 mg/mm
+Line:2,(265.781,320.853,46.364),ValveOn
+Line:2,(271.077,321.562,46.401),ValveOff,0.550 mg/mm
+Comment:- LEFT 4 / 3 - SMALL TRACE
+Line:2,(270.787,321.545,47.099),ValveOn
+Line:2,(273.714,321.757,47.097),ValveOff,0.350 mg/mm
+Line:2,(273.714,321.757,47.097),ValveOn
+Line:2,(275.959,323.951,47.102),ValveOff,0.350 mg/mm
+Line:2,(275.959,323.951,47.102),ValveOn
+Line:2,(276.865,324.813,47.096),ValveOff,0.350 mg/mm
+Dot:1,(276.865,324.813,47.096),ValveOn
+Comment:
+Comment:- LEFT 4 / 4 - MID FILL
+Line:2,(259.203,315.398,47.110),ValveOn
+Line:2,(259.134,314.286,47.109),ValveOff,0.550 mg/mm
+Line:2,(259.200,314.181,46.408),ValveOn
+Line:2,(260.704,314.257,47.103),ValveOff,0.550 mg/mm
+Line:2,(260.704,314.257,47.103),ValveOn
+Line:2,(262.194,314.715,47.103),ValveOff,0.550 mg/mm
+Line:2,(262.194,314.715,47.103),ValveOn
+Line:2,(263.795,315.493,47.103),ValveOff,0.550 mg/mm
+Line:2,(263.795,315.493,47.103),ValveOn
+Line:2,(265.264,316.724,47.105),ValveOff,0.550 mg/mm
+Line:2,(265.264,316.724,47.105),ValveOn
+Line:2,(268.291,317.167,47.103),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(268.733,317.414,47.103),ValveOn
+Line:2,(265.494,317.137,47.103),ValveOff,0.550 mg/mm
+Line:2,(265.494,317.137,47.103),ValveOn
+Line:2,(262.261,314.981,46.405),ValveOff,0.550 mg/mm
+Line:2,(262.261,314.981,46.405),ValveOn
+Line:2,(259.131,314.695,47.104),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(268.733,317.727,47.103),ValveOn
+Line:2,(265.494,317.450,47.103),ValveOff,0.550 mg/mm
+Line:2,(265.494,317.450,47.103),ValveOn
+Line:2,(262.261,315.294,46.405),ValveOff,0.550 mg/mm
+Line:2,(262.261,315.294,46.405),ValveOn
+Line:2,(259.131,315.008,47.104),ValveOff,0.550 mg/mm
+Comment:
+Line:2,(259.179,315.348,46.408),ValveOn
+Line:2,(261.767,315.414,47.104),ValveOff,0.550 mg/mm
+Line:2,(261.767,315.414,47.104),ValveOn
+Line:2,(264.617,317.261,46.410),ValveOff,0.550 mg/mm
+Line:2,(264.617,317.261,46.410),ValveOn
+Line:2,(269.251,318.287,47.104),ValveOff,0.550 mg/mm
+Comment:- LEFT 4 / 4 - SMALL TRACE
+Line:2,(269.387,318.396,47.101),ValveOn
+Line:2,(272.604,318.398,47.101),ValveOff,0.350 mg/mm
+Line:2,(272.604,318.398,47.101),ValveOn
+Line:2,(277.243,322.375,47.106),ValveOff,0.350 mg/mm
+Line:2,(277.243,322.375,47.106),ValveOn
+Line:2,(278.505,323.493,47.100),ValveOff,0.650 mg/mm
+Dot:1,(278.505,323.493,47.100),ValveOn
+Comment:
+Comment:
+Comment:- BOTTOM TRACE - RIGHT 1
+Dot:1,(281.905,383.210,47.084),ValveOn
+Line:2,(281.905,383.210,47.084),ValveOn
+Line:2,(280.805,382.663,47.087),ValveOff,0.650 mg/mm
+Line:2,(280.805,382.663,47.087),ValveOn
+Line:2,(278.086,382.643,46.387),ValveOff,0.350 mg/mm
+Line:2,(278.086,382.643,46.387),ValveOn
+Line:2,(276.484,381.383,47.083),ValveOff,0.350 mg/mm
+Line:2,(276.484,381.383,47.083),ValveOn
+Line:2,(276.439,366.067,46.386),ValveOff,0.350 mg/mm
+Line:2,(276.439,366.067,46.386),ValveOn
+Line:2,(274.250,335.431,46.387),ValveOff,0.350 mg/mm
+Comment:- RIGHT 1/2 - ARC
+Disable:Arc:3,(274.250,335.431,46.387),ValveOn
+Disable:ArcMid:3,(273.624,334.733,46.387),ValveOn
+Disable:Arc:3,(273.070,335.362,46.387),ValveOff
+Comment:
+Line:2,(274.250,335.431,46.387),ValveOn
+Line:2,(273.940,334.688,46.387),ValveOff,0.350 mg/mm
+Line:2,(273.940,334.688,46.387),ValveOn
+Line:2,(273.566,334.425,46.387),ValveOff,0.350 mg/mm
+Line:2,(273.566,334.425,46.387),ValveOn
+Line:2,(273.033,334.760,46.387),ValveOff,0.350 mg/mm
+Line:2,(273.033,334.760,46.387),ValveOn
+Line:2,(273.070,335.362,46.387),ValveOff,0.350 mg/mm
+Comment:
+Disable:Line:1,(274.141,334.981,46.387),ValveOn
+Disable:Line:1,(273.502,334.310,46.387),ValveOff,0.200 mg/mm
+Disable:Line:1,(273.502,334.309,46.387),ValveOn
+Disable:Line:1,(272.970,334.911,46.382),ValveOff,0.200 mg/mm
+Comment:- BOTTOM TRACE - RIGHT 2
+Line:2,(273.070,335.362,46.387),ValveOn
+Line:2,(275.244,366.214,46.382),ValveOff,0.350 mg/mm
+Line:2,(275.244,366.214,46.382),ValveOn
+Line:2,(275.260,383.160,46.381),ValveOff,0.350 mg/mm
+Line:2,(275.260,383.160,46.381),ValveOn
+Line:2,(276.114,383.945,46.379),ValveOff,0.350 mg/mm
+Line:2,(276.114,383.945,46.379),ValveOn
+Line:2,(279.876,383.947,46.388),ValveOff,0.350 mg/mm
+Line:2,(279.876,383.947,46.388),ValveOn
+Line:2,(280.378,384.483,46.381),ValveOff,0.650 mg/mm
+Dot:1,(280.378,384.483,46.381),ValveOn
+Comment:
+Comment:- BOTTOM TRACE - RIGHT 3
+Dot:1,(280.402,386.589,47.084),ValveOn
+Line:2,(280.402,386.589,47.084),ValveOn
+Line:2,(280.004,386.729,47.085),ValveOff,0.650 mg/mm
+Line:2,(280.004,386.729,47.085),ValveOn
+Line:2,(274.875,386.734,46.383),ValveOff,0.350 mg/mm
+Line:2,(274.875,386.734,46.383),ValveOn
+Line:2,(274.103,385.936,46.383),ValveOff,0.350 mg/mm
+Line:2,(274.103,385.936,46.383),ValveOn
+Line:2,(274.031,366.194,46.381),ValveOff,0.350 mg/mm
+Line:2,(274.031,366.194,46.381),ValveOn
+Line:2,(271.842,335.351,46.387),ValveOff,0.350 mg/mm
+Comment:RIGHT 3/4 - ARC
+Disable:Arc:3,(271.842,335.351,46.387),ValveOn
+Disable:ArcMid:3,(271.225,334.686,46.387),ValveOn
+Disable:Arc:3,(270.672,335.388,46.387),ValveOff
+Comment:
+Line:2,(271.842,335.351,46.387),ValveOn
+Line:2,(271.613,334.860,46.387),ValveOff,0.350 mg/mm
+Line:2,(271.613,334.860,46.387),ValveOn
+Line:2,(271.210,334.672,46.387),ValveOff,0.350 mg/mm
+Line:2,(271.210,334.672,46.387),ValveOn
+Line:2,(270.735,334.865,46.387),ValveOff,0.350 mg/mm
+Line:2,(270.699,334.908,46.387),ValveOn
+Line:2,(270.672,335.388,46.387),ValveOff,0.350 mg/mm
+Comment:
+Comment:- BOTTOM TRACE - RIGHT 4
+Line:2,(270.672,335.388,46.387),ValveOn
+Line:2,(272.846,366.269,46.382),ValveOff,0.350 mg/mm
+Line:2,(272.846,366.269,46.382),ValveOn
+Line:2,(272.769,387.059,47.077),ValveOff,0.350 mg/mm
+Line:2,(272.769,387.059,47.077),ValveOn
+Line:2,(274.622,388.310,46.377),ValveOff,0.350 mg/mm
+Line:2,(274.622,388.310,46.377),ValveOn
+Line:2,(281.324,388.299,47.083),ValveOff,0.350 mg/mm
+Line:2,(281.324,388.299,47.083),ValveOn
+Line:2,(281.974,387.804,46.379),ValveOff,0.650 mg/mm
+Dot:1,(281.974,387.804,46.379),ValveOn
+.End
+.Patt:test lines
+Line:1,(207.070,327.041,46.421),ValveOn
+Line:1,(207.070,377.290,46.421),ValveOff,0
+Line:1,(207.578,377.290,46.421),ValveOn
+Line:1,(207.578,327.049,46.421),ValveOff,0
+Line:1,(208.073,327.041,46.421),ValveOn
+Line:1,(208.073,377.290,46.421),ValveOff,0
+Line:1,(208.581,377.290,46.421),ValveOn
+Line:1,(208.581,327.049,46.421),ValveOff,0
+Line:1,(209.073,327.041,46.421),ValveOn
+Line:1,(209.073,377.290,46.421),ValveOff,0
+Line:1,(209.581,377.290,46.421),ValveOn
+Line:1,(209.581,327.049,46.421),ValveOff,0
+Line:1,(210.076,327.041,46.421),ValveOn
+Line:1,(210.076,377.290,46.421),ValveOff,0
+Line:1,(210.584,377.290,46.421),ValveOn
+Line:1,(210.584,327.049,46.421),ValveOff,0
+Line:1,(211.072,327.041,46.421),ValveOn
+Line:1,(211.072,377.290,46.421),ValveOff,0
+Line:1,(211.580,377.290,46.421),ValveOn
+Line:1,(211.580,327.049,46.421),ValveOff,0
+Line:1,(212.075,327.041,46.421),ValveOn
+Line:1,(212.075,377.290,46.421),ValveOff,0
+Line:1,(212.583,377.290,46.421),ValveOn
+Line:1,(212.583,327.049,46.421),ValveOff,0
+Line:1,(213.075,327.041,46.421),ValveOn
+Line:1,(213.075,377.290,46.421),ValveOff,0
+Line:1,(213.583,377.290,46.421),ValveOn
+Line:1,(213.583,327.049,46.421),ValveOff,0
+Line:1,(214.078,327.041,46.421),ValveOn
+Line:1,(214.078,377.290,46.421),ValveOff,0
+Line:1,(214.586,377.290,46.421),ValveOn
+Line:1,(214.586,327.049,46.421),ValveOff,0
+Line:1,(215.070,327.041,46.421),ValveOn
+Line:1,(215.070,377.290,46.421),ValveOff,0
+Line:1,(215.578,377.290,46.421),ValveOn
+Line:1,(215.578,327.049,46.421),ValveOff,0
+Line:1,(216.073,327.041,46.421),ValveOn
+Line:1,(216.073,377.290,46.421),ValveOff,0
+Line:1,(216.581,377.290,46.421),ValveOn
+Line:1,(216.581,327.049,46.421),ValveOff,0
+Line:1,(217.073,327.041,46.421),ValveOn
+Line:1,(217.073,377.290,46.421),ValveOff,0
+Line:1,(217.581,377.290,46.421),ValveOn
+Line:1,(217.581,327.049,46.421),ValveOff,0
+Line:1,(218.076,327.041,46.421),ValveOn
+Line:1,(218.076,377.290,46.421),ValveOff,0
+Line:1,(218.584,377.290,46.421),ValveOn
+Line:1,(218.584,327.049,46.421),ValveOff,0
+Line:1,(219.072,327.041,46.421),ValveOn
+Line:1,(219.072,377.290,46.421),ValveOff,0
+Line:1,(219.580,377.290,46.421),ValveOn
+Line:1,(219.580,327.049,46.421),ValveOff,0
+Line:1,(220.075,327.041,46.421),ValveOn
+Line:1,(220.075,377.290,46.421),ValveOff,0
+Line:1,(220.583,377.290,46.421),ValveOn
+Line:1,(220.583,327.049,46.421),ValveOff,0
+Line:1,(221.075,327.041,46.421),ValveOn
+Line:1,(221.075,377.290,46.421),ValveOff,0
+Line:1,(221.583,377.290,46.421),ValveOn
+Line:1,(221.583,327.049,46.421),ValveOff,0
+Line:1,(222.078,327.041,46.421),ValveOn
+Line:1,(222.078,377.290,46.421),ValveOff,0
+Line:1,(222.586,377.290,46.421),ValveOn
+Line:1,(222.586,327.049,46.421),ValveOff,0
+Line:1,(223.073,327.041,46.421),ValveOn
+Line:1,(223.073,377.290,46.421),ValveOff,0
+Line:1,(223.581,377.290,46.421),ValveOn
+Line:1,(223.581,327.049,46.421),ValveOff,0
+Line:1,(224.076,327.041,46.421),ValveOn
+Line:1,(224.076,377.290,46.421),ValveOff,0
+Line:1,(224.584,377.290,46.421),ValveOn
+Line:1,(224.584,327.049,46.421),ValveOff,0
+Line:1,(225.076,327.041,46.421),ValveOn
+Line:1,(225.076,377.290,46.421),ValveOff,0
+Line:1,(225.584,377.290,46.421),ValveOn
+Line:1,(225.584,327.049,46.421),ValveOff,0
+Line:1,(226.079,327.041,46.421),ValveOn
+Line:1,(226.079,377.290,46.421),ValveOff,0
+Line:1,(226.587,377.290,46.421),ValveOn
+Line:1,(226.587,327.049,46.421),ValveOff,0
+Line:1,(227.075,327.041,46.421),ValveOn
+Line:1,(227.075,377.290,46.421),ValveOff,0
+Line:1,(227.583,377.290,46.421),ValveOn
+Line:1,(227.583,327.049,46.421),ValveOff,0
+Line:1,(228.078,327.041,46.421),ValveOn
+Line:1,(228.078,377.290,46.421),ValveOff,0
+Line:1,(228.586,377.290,46.421),ValveOn
+Line:1,(228.586,327.049,46.421),ValveOff,0
+Line:1,(229.078,327.041,46.421),ValveOn
+Line:1,(229.078,377.290,46.421),ValveOff,0
+Line:1,(229.586,377.290,46.421),ValveOn
+Line:1,(229.586,327.049,46.421),ValveOff,0
+Line:1,(230.081,327.041,46.421),ValveOn
+Line:1,(230.081,377.290,46.421),ValveOff,0
+Line:1,(230.589,377.290,46.421),ValveOn
+Line:1,(230.589,327.049,46.421),ValveOff,0
+Line:1,(231.073,327.041,46.421),ValveOn
+Line:1,(231.073,377.290,46.421),ValveOff,0
+Line:1,(231.581,377.290,46.421),ValveOn
+Line:1,(231.581,327.049,46.421),ValveOff,0
+Line:1,(232.076,327.041,46.421),ValveOn
+Line:1,(232.076,377.290,46.421),ValveOff,0
+Line:1,(232.584,377.290,46.421),ValveOn
+Line:1,(232.584,327.049,46.421),ValveOff,0
+Line:1,(233.076,327.041,46.421),ValveOn
+Line:1,(233.076,377.290,46.421),ValveOff,0
+Line:1,(233.584,377.290,46.421),ValveOn
+Line:1,(233.584,327.049,46.421),ValveOff,0
+Line:1,(234.079,327.041,46.421),ValveOn
+Line:1,(234.079,377.290,46.421),ValveOff,0
+Line:1,(234.587,377.290,46.421),ValveOn
+Line:1,(234.587,327.049,46.421),ValveOff,0
+Line:1,(235.075,327.041,46.421),ValveOn
+Line:1,(235.075,377.290,46.421),ValveOff,0
+Line:1,(235.583,377.290,46.421),ValveOn
+Line:1,(235.583,327.049,46.421),ValveOff,0
+Line:1,(236.078,327.041,46.421),ValveOn
+Line:1,(236.078,377.290,46.421),ValveOff,0
+Line:1,(236.586,377.290,46.421),ValveOn
+Line:1,(236.586,327.049,46.421),ValveOff,0
+Line:1,(237.078,327.041,46.421),ValveOn
+Line:1,(237.078,377.290,46.421),ValveOff,0
+Line:1,(237.586,377.290,46.421),ValveOn
+Line:1,(237.586,327.049,46.421),ValveOff,0
+Line:1,(238.081,327.041,46.421),ValveOn
+Line:1,(238.081,377.290,46.421),ValveOff,0
+Line:1,(238.589,377.290,46.421),ValveOn
+Line:1,(238.589,327.049,46.421),ValveOff,0
+Line:1,(239.071,327.041,46.421),ValveOn
+Line:1,(239.071,377.290,46.421),ValveOff,0
+Line:1,(239.579,377.290,46.421),ValveOn
+Line:1,(239.579,327.049,46.421),ValveOff,0
+Line:1,(240.074,327.041,46.421),ValveOn
+Line:1,(240.074,377.290,46.421),ValveOff,0
+Line:1,(240.582,377.290,46.421),ValveOn
+Line:1,(240.582,327.049,46.421),ValveOff,0
+Line:1,(241.074,327.041,46.421),ValveOn
+Line:1,(241.074,377.290,46.421),ValveOff,0
+Line:1,(241.582,377.290,46.421),ValveOn
+Line:1,(241.582,327.049,46.421),ValveOff,0
+Line:1,(242.077,327.041,46.421),ValveOn
+Line:1,(242.077,377.290,46.421),ValveOff,0
+Line:1,(242.585,377.290,46.421),ValveOn
+Line:1,(242.585,327.049,46.421),ValveOff,0
+Line:1,(243.073,327.041,46.421),ValveOn
+Line:1,(243.073,377.290,46.421),ValveOff,0
+Line:1,(243.581,377.290,46.421),ValveOn
+Line:1,(243.581,327.049,46.421),ValveOff,0
+Line:1,(244.076,327.041,46.421),ValveOn
+Line:1,(244.076,377.290,46.421),ValveOff,0
+Line:1,(244.584,377.290,46.421),ValveOn
+Line:1,(244.584,327.049,46.421),ValveOff,0
+Line:1,(245.076,327.041,46.421),ValveOn
+Line:1,(245.076,377.290,46.421),ValveOff,0
+Line:1,(245.584,377.290,46.421),ValveOn
+Line:1,(245.584,327.049,46.421),ValveOff,0
+Line:1,(246.079,327.041,46.421),ValveOn
+Line:1,(246.079,377.290,46.421),ValveOff,0
+Line:1,(246.587,377.290,46.421),ValveOn
+Line:1,(246.587,327.049,46.421),ValveOff,0
+Line:1,(247.071,327.041,46.421),ValveOn
+Line:1,(247.071,377.290,46.421),ValveOff,0
+Line:1,(247.579,377.290,46.421),ValveOn
+Line:1,(247.579,327.049,46.421),ValveOff,0
+Line:1,(248.074,327.041,46.421),ValveOn
+Line:1,(248.074,377.290,46.421),ValveOff,0
+Line:1,(248.582,377.290,46.421),ValveOn
+Line:1,(248.582,327.049,46.421),ValveOff,0
+Line:1,(249.074,327.041,46.421),ValveOn
+Line:1,(249.074,377.290,46.421),ValveOff,0
+Line:1,(249.582,377.290,46.421),ValveOn
+Line:1,(249.582,327.049,46.421),ValveOff,0
+Line:1,(250.077,327.041,46.421),ValveOn
+Line:1,(250.077,377.290,46.421),ValveOff,0
+Line:1,(250.585,377.290,46.421),ValveOn
+Line:1,(250.585,327.049,46.421),ValveOff,0
+Line:1,(251.073,327.041,46.421),ValveOn
+Line:1,(251.073,377.290,46.421),ValveOff,0
+Line:1,(251.581,377.290,46.421),ValveOn
+Line:1,(251.581,327.049,46.421),ValveOff,0
+Line:1,(252.076,327.041,46.421),ValveOn
+Line:1,(252.076,377.290,46.421),ValveOff,0
+Line:1,(252.584,377.290,46.421),ValveOn
+Line:1,(252.584,327.049,46.421),ValveOff,0
+Line:1,(253.076,327.041,46.421),ValveOn
+Line:1,(253.076,377.290,46.421),ValveOff,0
+Line:1,(253.584,377.290,46.421),ValveOn
+Line:1,(253.584,327.049,46.421),ValveOff,0
+Line:1,(254.079,327.041,46.421),ValveOn
+Line:1,(254.079,377.290,46.421),ValveOff,0
+Line:1,(254.587,377.290,46.421),ValveOn
+Line:1,(254.587,327.049,46.421),ValveOff,0
+Line:1,(255.074,327.041,46.421),ValveOn
+Line:1,(255.074,377.290,46.421),ValveOff,0
+Line:1,(255.582,377.290,46.421),ValveOn
+Line:1,(255.582,327.049,46.421),ValveOff,0
+Line:1,(256.077,327.041,46.421),ValveOn
+Line:1,(256.077,377.290,46.421),ValveOff,0
+Line:1,(256.585,377.290,46.421),ValveOn
+Line:1,(256.585,327.049,46.421),ValveOff,0
+Line:1,(257.077,327.041,46.421),ValveOn
+Line:1,(257.077,377.290,46.421),ValveOff,0
+Line:1,(257.585,377.290,46.421),ValveOn
+Line:1,(257.585,327.049,46.421),ValveOff,0
+Line:1,(258.080,327.041,46.421),ValveOn
+Line:1,(258.080,377.290,46.421),ValveOff,0
+Line:1,(258.588,377.290,46.421),ValveOn
+Line:1,(258.588,327.049,46.421),ValveOff,0
+Line:1,(259.076,327.041,46.421),ValveOn
+Line:1,(259.076,377.290,46.421),ValveOff,0
+Line:1,(259.584,377.290,46.421),ValveOn
+Line:1,(259.584,327.049,46.421),ValveOff,0
+Line:1,(260.079,327.041,46.421),ValveOn
+Line:1,(260.079,377.290,46.421),ValveOff,0
+Line:1,(260.587,377.290,46.421),ValveOn
+Line:1,(260.587,327.049,46.421),ValveOff,0
+Line:1,(261.079,327.041,46.421),ValveOn
+Line:1,(261.079,377.290,46.421),ValveOff,0
+Line:1,(261.587,377.290,46.421),ValveOn
+Line:1,(261.587,327.049,46.421),ValveOff,0
+Line:1,(262.082,327.041,46.421),ValveOn
+Line:1,(262.082,377.290,46.421),ValveOff,0
+Line:1,(262.590,377.290,46.421),ValveOn
+Line:1,(262.590,327.049,46.421),ValveOff,0
+Line:1,(263.074,327.041,46.421),ValveOn
+Line:1,(263.074,377.290,46.421),ValveOff,0
+Line:1,(263.582,377.290,46.421),ValveOn
+Line:1,(263.582,327.049,46.421),ValveOff,0
+Line:1,(264.077,327.041,46.421),ValveOn
+Line:1,(264.077,377.290,46.421),ValveOff,0
+Line:1,(264.585,377.290,46.421),ValveOn
+Line:1,(264.585,327.049,46.421),ValveOff,0
+Line:1,(265.077,327.041,46.421),ValveOn
+Line:1,(265.077,377.290,46.421),ValveOff,0
+Line:1,(265.585,377.290,46.421),ValveOn
+Line:1,(265.585,327.049,46.421),ValveOff,0
+Line:1,(266.080,327.041,46.421),ValveOn
+Line:1,(266.080,377.290,46.421),ValveOff,0
+Line:1,(266.588,377.290,46.421),ValveOn
+Line:1,(266.588,327.049,46.421),ValveOff,0
+Line:1,(267.076,327.041,46.421),ValveOn
+Line:1,(267.076,377.290,46.421),ValveOff,0
+Line:1,(267.584,377.290,46.421),ValveOn
+Line:1,(267.584,327.049,46.421),ValveOff,0
+Line:1,(268.079,327.041,46.421),ValveOn
+Line:1,(268.079,377.290,46.421),ValveOff,0
+Line:1,(268.587,377.290,46.421),ValveOn
+Line:1,(268.587,327.049,46.421),ValveOff,0
+Line:1,(269.079,327.041,46.421),ValveOn
+Line:1,(269.079,377.290,46.421),ValveOff,0
+Line:1,(269.587,377.290,46.421),ValveOn
+Line:1,(269.587,327.049,46.421),ValveOff,0
+Line:1,(270.082,327.041,46.421),ValveOn
+Line:1,(270.082,377.290,46.421),ValveOff,0
+Line:1,(270.590,377.290,46.421),ValveOn
+Line:1,(270.590,327.049,46.421),ValveOff,0
+.End
+.EndPattList

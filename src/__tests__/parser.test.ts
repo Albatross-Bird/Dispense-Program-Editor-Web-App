@@ -558,6 +558,86 @@ describe('GROUP without matching ENDGROUP', () => {
   });
 });
 
+// ── Nested groups ─────────────────────────────────────────────────────────────
+
+describe('Nested groups', () => {
+  it('parses two levels of nesting', () => {
+    const src = crlf([
+      ...MINIMAL_HEADER.split('\r\n'),
+      '.PattList',
+      '.Patt:nested',
+      'Comment:##GROUP:Outer',
+      'Dot:1,(1.000,1.000,1.000),ValveOn',
+      'Comment:##GROUP:Inner',
+      'Dot:2,(2.000,2.000,2.000),ValveOn',
+      'Comment:##ENDGROUP:Inner',
+      'Dot:3,(3.000,3.000,3.000),ValveOn',
+      'Comment:##ENDGROUP:Outer',
+      '.End',
+      '.EndTEMP',
+    ]);
+    const prog = parse(src, MYD_DEFAULT);
+    const cmds = prog.patterns[0].commands;
+    expect(cmds).toHaveLength(1);
+    const outer = cmds[0] as GroupNode;
+    expect(outer.kind).toBe('Group');
+    expect(outer.name).toBe('Outer');
+    expect(outer.commands).toHaveLength(3); // Dot + Inner group + Dot
+    const inner = outer.commands[1] as GroupNode;
+    expect(inner.kind).toBe('Group');
+    expect(inner.name).toBe('Inner');
+    expect(inner.commands).toHaveLength(1);
+    expect(inner.commands[0].kind).toBe('Dot');
+  });
+
+  it('round-trips two levels of nesting exactly', () => {
+    const src = crlf([
+      ...MINIMAL_HEADER.split('\r\n'),
+      '.PattList',
+      '.Patt:nested',
+      'Comment:##GROUP:Outer',
+      'Dot:1,(1.000,1.000,1.000),ValveOn',
+      'Comment:##GROUP:Inner',
+      'Dot:2,(2.000,2.000,2.000),ValveOn',
+      'Comment:##ENDGROUP:Inner',
+      'Dot:3,(3.000,3.000,3.000),ValveOn',
+      'Comment:##ENDGROUP:Outer',
+      '.End',
+      '.EndTEMP',
+    ]);
+    expect(serialize(parse(src, MYD_DEFAULT), MYD_DEFAULT)).toBe(src);
+  });
+
+  it('unclosed outer group flattens to root; mismatched ENDGROUP closes innermost', () => {
+    // ##ENDGROUP:Outer arrives but innermost open group is "Inner" — parser
+    // closes "Inner" (innermost rule, name is ignored).  "Outer" then has no
+    // matching ENDGROUP so at EOF it is flushed: the ##GROUP:Outer marker
+    // becomes a plain Comment and Inner's GroupNode is emitted to root.
+    const src = crlf([
+      ...MINIMAL_HEADER.split('\r\n'),
+      '.PattList',
+      '.Patt:unclosed',
+      'Comment:##GROUP:Outer',
+      'Comment:##GROUP:Inner',
+      'Dot:1,(1.000,1.000,1.000),ValveOn',
+      'Comment:##ENDGROUP:Outer',
+      '.End',
+      '.EndTEMP',
+    ]);
+    const prog = parse(src, MYD_DEFAULT);
+    const cmds = prog.patterns[0].commands;
+    // root = [Comment:##GROUP:Outer, GroupNode(Inner)]
+    expect(cmds).toHaveLength(2);
+    expect(cmds[0].kind).toBe('Comment');
+    expect((cmds[0] as CommentCommand).text).toBe('##GROUP:Outer');
+    const inner = cmds[1] as GroupNode;
+    expect(inner.kind).toBe('Group');
+    expect(inner.name).toBe('Inner');
+    expect(inner.commands).toHaveLength(1);
+    expect(inner.commands[0].kind).toBe('Dot');
+  });
+});
+
 // ── Edge cases ────────────────────────────────────────────────────────────────
 
 describe('edge cases', () => {

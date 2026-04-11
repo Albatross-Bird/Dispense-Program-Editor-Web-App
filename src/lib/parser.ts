@@ -148,18 +148,34 @@ function parseDotLine(body: string, disabled: boolean): DotCommand {
 // ── Pattern block parser ──────────────────────────────────────────────────────
 
 const RE_GROUP_START = /^##GROUP:(.+)$/;
+const RE_GROUP_END   = /^##ENDGROUP:(.*)$/;
+
+interface GroupFrame {
+  name: string;
+  commands: PatternCommand[];
+}
 
 /**
- * @param allowGroups - false when parsing the interior of a Group block so
- *   that nested ##GROUP markers are treated as plain comments.
+ * Stack-based parser that supports arbitrarily nested groups.
+ *
+ * Defensive rules:
+ *  - Orphaned ##GROUP (no matching ##ENDGROUP): the ##GROUP: line is emitted
+ *    as a plain Comment and its children are emitted at the parent level.
+ *  - Orphaned ##ENDGROUP (no open group): emitted as a plain Comment.
+ *  - Name-mismatched ##ENDGROUP: closes the innermost open group anyway.
  */
 function parsePatternCommands(
   lines: string[],
   start: number,
   end: number,
-  allowGroups = true,
 ): PatternCommand[] {
-  const commands: PatternCommand[] = [];
+  const root: PatternCommand[] = [];
+  const stack: GroupFrame[] = [];
+
+  /** The command list we are currently appending to. */
+  const target = (): PatternCommand[] =>
+    stack.length > 0 ? stack[stack.length - 1].commands : root;
+
   let i = start;
 
   while (i < end) {
@@ -170,57 +186,54 @@ function parsePatternCommands(
     if (stripped.startsWith('Comment:')) {
       const text = stripped.slice('Comment:'.length);
 
-      if (allowGroups) {
-        const m = text.match(RE_GROUP_START);
-        if (m) {
-          const groupName = m[1];
-          const endToken = `Comment:##ENDGROUP:${groupName}`;
-          // Look ahead for the matching ENDGROUP within this block
-          let endIdx = -1;
-          for (let j = i + 1; j < end; j++) {
-            if (stripDisable(lines[j]).stripped === endToken) {
-              endIdx = j;
-              break;
-            }
-          }
-          if (endIdx !== -1) {
-            const groupCmds = parsePatternCommands(lines, i + 1, endIdx, false);
-            const node: GroupNode = {
-              kind: 'Group',
-              id: genId(),
-              name: groupName,
-              commands: groupCmds,
-              collapsed: false,
-            };
-            commands.push(node);
-            i = endIdx + 1;
-            continue;
-          }
-          // No matching ENDGROUP — fall through and store as regular Comment
-        }
+      const startMatch = text.match(RE_GROUP_START);
+      if (startMatch) {
+        stack.push({ name: startMatch[1], commands: [] });
+        i++;
+        continue;
       }
 
-      commands.push({ kind: 'Comment', id: genId(), text });
+      const endMatch = text.match(RE_GROUP_END);
+      if (endMatch) {
+        if (stack.length > 0) {
+          const frame = stack.pop()!;
+          const node: GroupNode = {
+            kind: 'Group',
+            id: genId(),
+            name: frame.name,
+            commands: frame.commands,
+            collapsed: false,
+          };
+          target().push(node);
+        } else {
+          // ENDGROUP with no open group → plain Comment
+          target().push({ kind: 'Comment', id: genId(), text });
+        }
+        i++;
+        continue;
+      }
+
+      target().push({ kind: 'Comment', id: genId(), text });
       i++;
       continue;
     }
 
     // ── Mark / Laser (stored verbatim) ────────────────────────────────────
     if (stripped.startsWith('Mark:')) {
-      commands.push({ kind: 'Mark', id: genId(), raw: rawLine } as MarkCommand);
+      target().push({ kind: 'Mark', id: genId(), raw: rawLine } as MarkCommand);
       i++;
       continue;
     }
 
     if (stripped.startsWith('Laser:')) {
-      commands.push({ kind: 'Laser', id: genId(), raw: rawLine } as LaserCommand);
+      target().push({ kind: 'Laser', id: genId(), raw: rawLine } as LaserCommand);
       i++;
       continue;
     }
 
     // ── Dot ───────────────────────────────────────────────────────────────
     if (stripped.startsWith('Dot:')) {
-      commands.push(parseDotLine(stripped, disabled));
+      target().push(parseDotLine(stripped, disabled));
       i++;
       continue;
     }
@@ -260,30 +273,39 @@ function parsePatternCommands(
                   flowRate: nextParts.flowRateStr,
                 },
               };
-              commands.push(cmd);
+              target().push(cmd);
               i += 2;
               continue;
             }
           }
         }
         // Not a clean pair — store verbatim
-        commands.push({ kind: 'Raw', id: genId(), raw: rawLine });
+        target().push({ kind: 'Raw', id: genId(), raw: rawLine });
         i++;
         continue;
       }
 
       // Orphaned ValveOff
-      commands.push({ kind: 'Raw', id: genId(), raw: rawLine });
+      target().push({ kind: 'Raw', id: genId(), raw: rawLine });
       i++;
       continue;
     }
 
     // ── Unknown (Arc, ArcMid, etc.) — store verbatim ──────────────────────
-    commands.push({ kind: 'Raw', id: genId(), raw: rawLine });
+    target().push({ kind: 'Raw', id: genId(), raw: rawLine });
     i++;
   }
 
-  return commands;
+  // Flush any unclosed groups: emit the ##GROUP: header as a plain Comment,
+  // then splice the children into the parent (preserves backward compatibility).
+  while (stack.length > 0) {
+    const frame = stack.pop()!;
+    const tgt = target();
+    tgt.push({ kind: 'Comment', id: genId(), text: `##GROUP:${frame.name}` });
+    for (const child of frame.commands) tgt.push(child);
+  }
+
+  return root;
 }
 
 // ── Main block parser ─────────────────────────────────────────────────────────
@@ -375,4 +397,28 @@ export function parse(source: string, _profile: SyntaxProfile): Program {
   }
 
   return { main, patterns, pattListEndToken };
+}
+
+// ── Partial-block helpers (used by the plain-text editor) ─────────────────────
+
+/**
+ * Parse just a pattern block into its command list.
+ * `text` must include the `.Patt:name` header and `.End` footer.
+ * Wraps in a minimal dummy program and delegates to the full parser.
+ */
+export function parsePatternBlock(text: string): PatternCommand[] {
+  const wrapped = `.Main\n.EndMain\n.PattList\n${text.trim()}\n.EndTEMP`;
+  const program = parse(wrapped, {} as SyntaxProfile);
+  if (program.patterns.length === 0) throw new Error('No pattern block found in text');
+  return program.patterns[0].commands;
+}
+
+/**
+ * Parse just a main block.
+ * `text` must include the `.Main` header and `.EndMain` footer.
+ */
+export function parseMainBlockText(text: string): MainBlock {
+  const wrapped = `${text.trim()}\n.PattList\n.EndTEMP`;
+  const program = parse(wrapped, {} as SyntaxProfile);
+  return program.main;
 }

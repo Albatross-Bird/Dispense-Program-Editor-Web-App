@@ -28,6 +28,18 @@ function findAreaFillGroup(
   return null;
 }
 
+function findSingleGroup(
+  commands: PatternCommand[],
+  ids: Set<string>,
+): GroupNode | null {
+  if (ids.size !== 1) return null;
+  const [id] = ids;
+  for (const c of commands) {
+    if (c.kind === 'Group' && c.id === id) return c;
+  }
+  return null;
+}
+
 // ── Icon components ───────────────────────────────────────────────────────────
 
 function CopyIcon() {
@@ -227,6 +239,9 @@ export function useCommandContextMenu() {
       const areaFillGroup = hasSelection
         ? findAreaFillGroup(commands, selectedCommandIds)
         : null;
+      const singleGroup = hasSelection
+        ? findSingleGroup(commands, selectedCommandIds)
+        : null;
 
       const n = selectedCommandIds.size;
       const items: ContextMenuItem[] = [
@@ -259,7 +274,28 @@ export function useCommandContextMenu() {
         },
       ];
 
-      if (areaFillGroup) {
+      if (singleGroup) {
+        items.push({ separator: true });
+        items.push({
+          label: 'Rename Group',
+          icon: 'edit',
+          action: () => {
+            useUIStore.getState().setRenamingGroupId(singleGroup.id!);
+            hideContextMenu();
+          },
+        });
+        if (areaFillGroup) {
+          items.push({
+            label: 'Edit Area Fill',
+            icon: 'edit',
+            action: () => {
+              setAreaFillEditGroupId(areaFillGroup.id!);
+              setActiveTool('area-fill');
+              hideContextMenu();
+            },
+          });
+        }
+      } else if (areaFillGroup) {
         items.push({ separator: true });
         items.push({
           label: 'Edit Area Fill',

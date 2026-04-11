@@ -130,7 +130,7 @@ export interface RawCommand {
  *   ...commands...
  *   Comment:##ENDGROUP:<name>
  *
- * Groups cannot be nested.
+ * Groups may be arbitrarily nested.
  */
 export interface GroupNode {
   kind: 'Group';

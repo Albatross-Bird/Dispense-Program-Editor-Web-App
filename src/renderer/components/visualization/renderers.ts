@@ -78,8 +78,8 @@ export function drawLine(
   const basePx = lineWidthPx ?? 1.5;
 
   // Scale arrowhead and start-dot relative to the line width.
-  const arrowSize = Math.max(4, basePx * 3.5);
-  const dotRadius = Math.max(1.5, basePx * 1.2);
+  const arrowSize = Math.max(4, basePx * 3);
+  const dotRadius = arrowSize / 2; // diameter == arrowSize == square side length
 
   // Shorten the stroke so it ends at the arrowhead base rather than the tip,
   // preventing the square line cap from showing through the arrow triangle.
@@ -306,7 +306,22 @@ export function drawCommand(
   connectedStarts: Set<string> = new Set(),
   renderConfig?: RenderConfig,
   selectedJunctionStarts: Set<string> = new Set(),
+  searchMatchIds?: Set<string>,
 ) {
+  // Groups are transparent containers — recurse without applying search dimming
+  // at the group level so each child handles its own visibility independently.
+  if (cmd.kind === 'Group') {
+    for (const child of cmd.commands) {
+      drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts, searchMatchIds);
+    }
+    return;
+  }
+
+  // Dim non-matching commands when a search is active.
+  const dimmed = searchMatchIds !== undefined && searchMatchIds.size > 0
+    && !(cmd.id && searchMatchIds.has(cmd.id));
+  if (dimmed) ctx.save(), ctx.globalAlpha *= 0.2;
+
   const isSelected = Boolean(cmd.id && selectedIds.has(cmd.id));
 
   switch (cmd.kind) {
@@ -327,13 +342,12 @@ export function drawCommand(
     }
     case 'Mark':  drawMark(ctx, cmd, cam, isSelected);  break;
     case 'Laser': drawLaser(ctx, cmd, cam, isSelected); break;
-    case 'Group':
-      for (const child of cmd.commands) drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts);
-      break;
     case 'Comment':
     case 'Raw':
       break;
   }
+
+  if (dimmed) ctx.restore();
 }
 
 // ── Hit testing ───────────────────────────────────────────────────────────────
@@ -402,6 +416,24 @@ export function extractMarkFiducials(
     }
   }
   return result;
+}
+
+/**
+ * Extract the Z coordinate from the first Mark command's first (x,y,z) triplet.
+ * Returns null if no Mark commands with coordinates are found.
+ */
+export function extractDefaultZ(commands: PatternCommand[]): number | null {
+  const re = /\(\s*[-\d.]+\s*,\s*[-\d.]+\s*,\s*([-\d.]+)\s*\)/;
+  for (const cmd of commands) {
+    if (cmd.kind === 'Mark') {
+      const m = re.exec(cmd.raw);
+      if (m) return parseFloat(m[1]);
+    } else if (cmd.kind === 'Group') {
+      const z = extractDefaultZ(cmd.commands);
+      if (z !== null) return z;
+    }
+  }
+  return null;
 }
 
 /** Collect all drawable 2-D world points from a command list (for fit-to-view). */

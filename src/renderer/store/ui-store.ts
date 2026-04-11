@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { PatternCommand } from '@lib/types';
+import type { SearchScope, SearchMatch } from '@lib/search';
 
 const SPLIT_KEY = 'splitRatio';
 
@@ -17,7 +18,7 @@ export interface BackgroundImage {
   dataUrl: string;
 }
 
-export type ActiveTool = 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item' | null;
+export type ActiveTool = 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item' | null;
 
 export interface ContextMenuItem {
   label?: string;
@@ -75,6 +76,47 @@ interface UIStore {
   /** The valve/param number (1–10) to assign to newly created Line/Dot commands. */
   activeParam: number;
   setActiveParam: (n: number) => void;
+
+  /** ID of the Group currently being renamed inline in the command list, or null. */
+  renamingGroupId: string | null;
+  setRenamingGroupId: (id: string | null) => void;
+
+  // ── Layers panel position ────────────────────────────────────────────────────
+  /** Per-patternKey layers panel position. Key = `${filePath}::${patternName}`. */
+  layersPanelPositions: Record<string, { x: number; y: number }>;
+  setLayersPanelPosition: (key: string, pos: { x: number; y: number }) => void;
+
+  // ── Search ──────────────────────────────────────────────────────────────────
+  searchQuery: string;
+  searchScope: SearchScope;
+  /** Ordered list of all matches across the searched scope. */
+  searchMatchList: SearchMatch[];
+  /** Index into searchMatchList for the currently focused/navigated match. */
+  searchFocusedIdx: number;
+  setSearchQuery: (q: string) => void;
+  setSearchScope: (s: SearchScope) => void;
+  setSearchResults: (list: SearchMatch[]) => void;
+  /** Advance (+1) or retreat (−1) through the match list, wrapping around. */
+  stepSearchFocus: (dir: 1 | -1) => void;
+  clearSearch: () => void;
+
+  // ── New-line chain mode ──────────────────────────────────────────────────────
+  /** When true, successive New Line placements share endpoints (chained). */
+  chainMode: boolean;
+  setChainMode: (v: boolean) => void;
+
+  // ── New-comment tool ─────────────────────────────────────────────────────────
+  /** Text currently typed in the comment tool's floating input. */
+  pendingCommentText: string;
+  setPendingCommentText: (text: string) => void;
+
+  // ── Plain text mode ──────────────────────────────────────────────────────────
+  plainTextMode: boolean;
+  setPlainTextMode: (v: boolean) => void;
+  /** Parse status of the plain-text editor. 'idle' = not yet parsed / typing. */
+  plainTextParseStatus: 'idle' | 'valid' | 'error';
+  plainTextParseError: string | null;
+  setPlainTextParseStatus: (status: 'idle' | 'valid' | 'error', error?: string | null) => void;
 }
 
 export const useUIStore = create<UIStore>((set, get) => ({
@@ -110,10 +152,41 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setAreaFillEditGroupId: (areaFillEditGroupId: string | null) => set({ areaFillEditGroupId }),
   clearAreaFill: () => set({ areaFillPolygon: [], areaFillClosed: false, areaFillPreviewCmds: [], areaFillEditGroupId: null }),
 
-  contextMenu: null,
   showContextMenu: (state: ContextMenuState) => set({ contextMenu: state }),
   hideContextMenu: () => set({ contextMenu: null }),
 
   activeParam: 1,
   setActiveParam: (activeParam: number) => set({ activeParam }),
+
+  renamingGroupId: null,
+  setRenamingGroupId: (renamingGroupId: string | null) => set({ renamingGroupId }),
+
+  layersPanelPositions: {},
+  setLayersPanelPosition: (key, pos) =>
+    set((s) => ({ layersPanelPositions: { ...s.layersPanelPositions, [key]: pos } })),
+
+  searchQuery: '',
+  searchScope: 'pattern' as SearchScope,
+  searchMatchList: [],
+  searchFocusedIdx: 0,
+  setSearchQuery: (searchQuery) => set({ searchQuery }),
+  setSearchScope: (searchScope) => set({ searchScope }),
+  setSearchResults: (searchMatchList) => set({ searchMatchList, searchFocusedIdx: 0 }),
+  stepSearchFocus: (dir) => set((s) => {
+    const n = s.searchMatchList.length;
+    if (n === 0) return {};
+    return { searchFocusedIdx: ((s.searchFocusedIdx + dir) % n + n) % n };
+  }),
+  clearSearch: () => set({ searchQuery: '', searchMatchList: [], searchFocusedIdx: 0 }),
+
+  chainMode: false,
+  setChainMode: (chainMode: boolean) => set({ chainMode }),
+  pendingCommentText: '',
+  setPendingCommentText: (pendingCommentText: string) => set({ pendingCommentText }),
+
+  plainTextMode: false,
+  setPlainTextMode: (plainTextMode: boolean) => set({ plainTextMode }),
+  plainTextParseStatus: 'idle',
+  plainTextParseError: null,
+  setPlainTextParseStatus: (status, error = null) => set({ plainTextParseStatus: status, plainTextParseError: error ?? null }),
 }));

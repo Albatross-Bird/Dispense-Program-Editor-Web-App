@@ -8,9 +8,11 @@ import type { AffineTransform } from '@lib/affine';
 import { computeAffine } from '@lib/affine';
 import type { Camera } from './camera';
 import { fitCamera, screenToWorld, worldToScreen, zoomAt } from './camera';
-import { collectPoints, computeConnectedStarts, computeSelectedJunctionStarts, drawCommand, extractMarkFiducials, hitTest, valveColor } from './renderers';
+import { collectPoints, computeConnectedStarts, computeSelectedJunctionStarts, drawCommand, extractMarkFiducials, extractDefaultZ, hitTest, valveColor } from './renderers';
 import type { RenderConfig } from './renderers';
-import { useSettingsStore } from '../../store/settings-store';
+import { useSettingsStore, DEFAULT_BG_IMAGE_SETTINGS } from '../../store/settings-store';
+import type { BgImageSettings } from '../../store/settings-store';
+import BgImageSettingsPanel from './BgImageSettingsPanel';
 import {
   computeHandles, drawHandles, hitTestHandle,
   deepCloneCommands, clearRawForModified, findCmdById,
@@ -19,9 +21,73 @@ import type { Handle } from './handles';
 import CalibrationOverlay from './Calibration';
 import { useCommandContextMenu } from '../ContextMenu';
 
+// ── Background image processing ───────────────────────────────────────────────
+
+function isDefaultBgSettings(s: BgImageSettings): boolean {
+  return (
+    !s.grayscale &&
+    s.resolutionScale === 100 &&
+    s.brightness === 0 &&
+    s.contrast === 0 &&
+    !s.threshold &&
+    s.smoothing === 0
+  );
+}
+
+/**
+ * Apply the filter pipeline to an image, returning a processed HTMLCanvasElement
+ * at the original image dimensions (so calibration geometry is unaffected).
+ *
+ * Pipeline: scale → CSS filters (grayscale / brightness / contrast / blur) →
+ *           optional threshold pixel pass → upscale back to original size.
+ */
+function processImage(img: HTMLImageElement, s: BgImageSettings): HTMLCanvasElement {
+  const scale = Math.max(0.1, Math.min(1, s.resolutionScale / 100));
+  const sw = Math.max(1, Math.round(img.width * scale));
+  const sh = Math.max(1, Math.round(img.height * scale));
+
+  // ── Scaled + filtered canvas ──────────────────────────────────────────────
+  const scaledCanvas = document.createElement('canvas');
+  scaledCanvas.width = sw;
+  scaledCanvas.height = sh;
+  const scaledCtx = scaledCanvas.getContext('2d')!;
+
+  const filters: string[] = [];
+  if (s.grayscale)      filters.push('grayscale(1)');
+  if (s.brightness !== 0) filters.push(`brightness(${((s.brightness + 100) / 100).toFixed(3)})`);
+  if (s.contrast !== 0)   filters.push(`contrast(${((s.contrast + 100) / 100).toFixed(3)})`);
+  if (s.smoothing > 0)    filters.push(`blur(${(s.smoothing * 0.5).toFixed(1)}px)`);
+
+  if (filters.length > 0) scaledCtx.filter = filters.join(' ');
+  scaledCtx.drawImage(img, 0, 0, sw, sh);
+  scaledCtx.filter = 'none';
+
+  // ── Threshold pixel pass ──────────────────────────────────────────────────
+  if (s.threshold) {
+    const id = scaledCtx.getImageData(0, 0, sw, sh);
+    const { data } = id;
+    const thresh = s.thresholdValue;
+    for (let i = 0; i < data.length; i += 4) {
+      const lum = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      const v = lum >= thresh ? 255 : 0;
+      data[i] = data[i + 1] = data[i + 2] = v;
+    }
+    scaledCtx.putImageData(id, 0, 0);
+  }
+
+  // ── Upscale back to original dimensions ───────────────────────────────────
+  const out = document.createElement('canvas');
+  out.width  = img.width;
+  out.height = img.height;
+  const outCtx = out.getContext('2d')!;
+  outCtx.imageSmoothingEnabled = false; // pixelated look for resolution reduction
+  outCtx.drawImage(scaledCanvas, 0, 0, img.width, img.height);
+  return out;
+}
+
 // ── Canvas rendering ──────────────────────────────────────────────────────────
 
-function drawUncalibratedImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement, cam: Camera) {
+function drawUncalibratedImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement | HTMLCanvasElement, cam: Camera) {
   const [sx, sy] = worldToScreen(0, 0, cam);
   ctx.save();
   ctx.globalAlpha = 0.85;
@@ -31,7 +97,7 @@ function drawUncalibratedImage(ctx: CanvasRenderingContext2D, img: HTMLImageElem
 
 function drawCalibratedImage(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement,
+  img: HTMLImageElement | HTMLCanvasElement,
   t: AffineTransform,
   cam: Camera,
 ) {
@@ -317,6 +383,32 @@ function hitTestLineForSplit(
   return best;
 }
 
+// ── Area fill polygon filtering ───────────────────────────────────────────────
+
+/**
+ * Return a copy of `cmds` with any Line/Dot whose key points fall inside
+ * `poly` removed. Used to hide existing pattern content under the area-fill
+ * polygon so only the semi-transparent preview is visible.
+ */
+function filterOutsidePolygon(cmds: PatternCommand[], poly: [number, number][]): PatternCommand[] {
+  const out: PatternCommand[] = [];
+  for (const cmd of cmds) {
+    if (cmd.kind === 'Line') {
+      const s = pointInPolygon([cmd.startPoint[0], cmd.startPoint[1]], poly);
+      const e = pointInPolygon([cmd.endPoint[0],   cmd.endPoint[1]],   poly);
+      if (!s && !e) out.push(cmd);
+    } else if (cmd.kind === 'Dot') {
+      if (!pointInPolygon([cmd.point[0], cmd.point[1]], poly)) out.push(cmd);
+    } else if (cmd.kind === 'Group') {
+      const filtered = filterOutsidePolygon(cmd.commands, poly);
+      if (filtered.length > 0) out.push({ ...cmd, commands: filtered });
+    } else {
+      out.push(cmd);
+    }
+  }
+  return out;
+}
+
 /**
  * Sort selected line commands into a connected chain. Returns IDs in order,
  * or just the input IDs if no clear chain can be built.
@@ -385,6 +477,34 @@ export function expandSelectedIds(
 }
 
 
+/** Apply dx/dy translation to selected commands in-place (for live preview only — does NOT clear _raw). */
+function applyMoveDeltaCmd(cmd: PatternCommand, dx: number, dy: number): PatternCommand {
+  if (cmd.kind === 'Line') {
+    return {
+      ...cmd,
+      startPoint: [cmd.startPoint[0] + dx, cmd.startPoint[1] + dy, cmd.startPoint[2]],
+      endPoint:   [cmd.endPoint[0]   + dx, cmd.endPoint[1]   + dy, cmd.endPoint[2]],
+    };
+  }
+  if (cmd.kind === 'Dot') {
+    return { ...cmd, point: [cmd.point[0] + dx, cmd.point[1] + dy, cmd.point[2]] };
+  }
+  if (cmd.kind === 'Group') {
+    return { ...cmd, commands: cmd.commands.map((c) => applyMoveDeltaCmd(c, dx, dy)) };
+  }
+  return cmd;
+}
+
+function applyMoveDelta(cmds: PatternCommand[], selectedIds: Set<string>, dx: number, dy: number): PatternCommand[] {
+  return cmds.map((cmd) => {
+    if (cmd.id && selectedIds.has(cmd.id)) return applyMoveDeltaCmd(cmd, dx, dy);
+    if (cmd.kind === 'Group') {
+      return { ...cmd, commands: applyMoveDelta(cmd.commands, selectedIds, dx, dy) };
+    }
+    return cmd;
+  });
+}
+
 function renderFrame(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -392,7 +512,7 @@ function renderFrame(
   cam: Camera,
   commands: PatternCommand[],
   selectedIds: Set<string>,
-  imgEl: HTMLImageElement | null,
+  imgEl: HTMLImageElement | HTMLCanvasElement | null,
   calibTransform: AffineTransform | null,
   isCalibrating: boolean,
   calibPixels: ([number, number] | null)[],
@@ -401,6 +521,8 @@ function renderFrame(
   activeCalibIdx: number | null,
   hiddenValves: Set<number>,
   renderConfig?: RenderConfig,
+  searchMatchIds?: Set<string>,
+  ghostCommands?: PatternCommand[],
 ) {
   ctx.clearRect(0, 0, w, h);
   ctx.fillStyle = '#374151';
@@ -415,13 +537,25 @@ function renderFrame(
   }
 
   if (!isCalibrating) {
+    // Draw ghost (original positions) at 10% opacity during group drag
+    if (ghostCommands && ghostCommands.length > 0) {
+      ctx.save();
+      ctx.globalAlpha = 0.10;
+      const noSelection = new Set<string>();
+      const ghostConnected = computeConnectedStarts(ghostCommands);
+      for (const cmd of ghostCommands) {
+        drawCommand(ctx, cmd, cam, noSelection, hiddenValves, ghostConnected, renderConfig, noSelection, undefined);
+      }
+      ctx.restore();
+    }
+
     if (commands.length > 0) {
       const expandedIds = expandSelectedIds(commands, selectedIds);
       const connectedStarts = computeConnectedStarts(commands);
       const selectedJunctionStarts = computeSelectedJunctionStarts(commands, expandedIds);
 
       for (const cmd of commands) {
-        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts);
+        drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts, searchMatchIds);
       }
     } else if (!imgEl) {
       ctx.fillStyle = '#6b7280';
@@ -446,10 +580,15 @@ interface LayersBoxProps {
   hasImage: boolean;
   imageVisible: boolean;
   onToggleImage: () => void;
+  onOpenBgSettings?: (anchorRect: DOMRect) => void;
   lineThicknesses: number[];
   dotSizes: number[];
   onLineThicknessChange: (paramIndex: number, mm: number) => void;
   onDotSizeChange: (paramIndex: number, mm: number) => void;
+  /** Absolute position within the canvas container. Null = CSS default (top-right). */
+  position: { x: number; y: number } | null;
+  onHeaderMouseDown: (e: React.MouseEvent) => void;
+  panelRef: React.Ref<HTMLDivElement>;
 }
 
 function ThickLineIcon({ color }: { color: string }) {
@@ -495,6 +634,15 @@ function ThicknessInput({
   );
 }
 
+function GearIcon() {
+  return (
+    <svg width="11" height="11" viewBox="0 0 11 11" fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="5.5" cy="5.5" r="1.6" />
+      <path d="M5.5 1v1M5.5 9v1M1 5.5h1M9 5.5h1M2.4 2.4l.7.7M7.9 7.9l.7.7M2.4 8.6l.7-.7M7.9 3.1l.7-.7" />
+    </svg>
+  );
+}
+
 function SlidersIcon() {
   return (
     <svg width="11" height="11" viewBox="0 0 11 11" fill="none" strokeLinecap="round">
@@ -508,17 +656,29 @@ function SlidersIcon() {
 
 function LayersBox({
   valves, hiddenValves, onToggleValve,
-  hasImage, imageVisible, onToggleImage,
+  hasImage, imageVisible, onToggleImage, onOpenBgSettings,
   lineThicknesses, dotSizes, onLineThicknessChange, onDotSizeChange,
+  position, onHeaderMouseDown, panelRef,
 }: LayersBoxProps) {
   const [showSizeControls, setShowSizeControls] = React.useState(false);
 
   if (valves.size === 0 && !hasImage) return null;
 
+  const panelStyle: React.CSSProperties = position
+    ? { position: 'absolute', top: position.y, left: position.x }
+    : { position: 'absolute', top: 8, right: 8 };
+
   return (
-    <div className="absolute top-2 left-2 bg-gray-900/90 border border-gray-700/60 rounded-md py-1.5 px-2 select-none z-10">
-      {/* Header row */}
-      <div className="flex items-center gap-1 pb-1">
+    <div
+      ref={panelRef}
+      style={panelStyle}
+      className="bg-gray-900/90 border border-gray-700/60 rounded-md py-1.5 px-2 select-none z-10"
+    >
+      {/* Header row — drag handle */}
+      <div
+        className="flex items-center gap-1 pb-1 cursor-move"
+        onMouseDown={onHeaderMouseDown}
+      >
         <span className="text-[9px] font-semibold text-gray-500 uppercase tracking-widest flex-1">Layers</span>
         {showSizeControls && (
           <>
@@ -529,6 +689,7 @@ function LayersBox({
         {/* Toggle size controls */}
         <button
           onClick={() => setShowSizeControls((v) => !v)}
+          onMouseDown={(e) => e.stopPropagation()}
           title={showSizeControls ? 'Hide size controls' : 'Show size controls'}
           className={`flex items-center justify-center w-4 h-4 ml-0.5 rounded transition-colors ${
             showSizeControls ? 'text-blue-400' : 'text-gray-600 hover:text-gray-400'
@@ -539,19 +700,30 @@ function LayersBox({
       </div>
 
       {hasImage && (
-        <button
-          onClick={onToggleImage}
-          className="flex items-center gap-1.5 w-full text-left rounded px-1 h-[26px] hover:bg-gray-700/50 transition-colors"
-        >
-          <div
-            className="w-3 h-3 rounded-sm shrink-0"
-            style={imageVisible
-              ? { backgroundColor: '#9ca3af' }
-              : { backgroundColor: 'transparent', border: '1.5px solid #9ca3af', opacity: 0.4 }
-            }
-          />
-          <span className={`text-xs flex-1 ${imageVisible ? 'text-gray-200' : 'text-gray-500'}`}>Background</span>
-        </button>
+        <div className="flex items-center h-[26px] gap-0.5">
+          <button
+            onClick={onToggleImage}
+            className="flex items-center gap-1.5 flex-1 min-w-0 rounded px-1 h-full hover:bg-gray-700/50 transition-colors"
+          >
+            <div
+              className="w-3 h-3 rounded-sm shrink-0"
+              style={imageVisible
+                ? { backgroundColor: '#9ca3af' }
+                : { backgroundColor: 'transparent', border: '1.5px solid #9ca3af', opacity: 0.4 }
+              }
+            />
+            <span className={`text-xs flex-1 ${imageVisible ? 'text-gray-200' : 'text-gray-500'}`}>Background</span>
+          </button>
+          {onOpenBgSettings && (
+            <button
+              onClick={(e) => onOpenBgSettings((e.currentTarget as HTMLButtonElement).getBoundingClientRect())}
+              title="Background image settings"
+              className="flex items-center justify-center w-5 h-5 rounded text-gray-500 hover:text-gray-300 hover:bg-gray-700/50 transition-colors shrink-0"
+            >
+              <GearIcon />
+            </button>
+          )}
+        </div>
       )}
 
       {[...valves].sort((a, b) => a - b).map((v) => {
@@ -653,6 +825,12 @@ export default function Canvas() {
   const dragWorkingCmdsRef   = useRef<PatternCommand[] | null>(null);
   const dragCleanupRef       = useRef<(() => void) | null>(null);
 
+  // Group drag refs
+  const isGroupDraggingRef   = useRef(false);
+  const groupDragStartRef    = useRef<{ sx: number; sy: number; startWx: number; startWy: number } | null>(null);
+  const groupDragGhostRef    = useRef<PatternCommand[] | null>(null);
+  const groupDragCleanupRef  = useRef<(() => void) | null>(null);
+
   // Stable mirrors of React state for use inside callbacks attached to window
   const commandsRef          = useRef<PatternCommand[]>([]);
   const selectedCommandIdsRef= useRef<Set<string>>(new Set());
@@ -667,6 +845,7 @@ export default function Canvas() {
   const selectRange          = useProgramStore((s) => s.selectRange);
   const clearSelection       = useProgramStore((s) => s.clearSelection);
   const setProgram           = useProgramStore((s) => s.setProgram);
+  const moveSelection        = useProgramStore((s) => s.moveSelection);
   const filePath             = useProgramStore((s) => s.filePath);
 
   const setZoomLevel       = useUIStore((s) => s.setZoomLevel);
@@ -685,8 +864,9 @@ export default function Canvas() {
     [backgroundImages, patternKey],
   );
 
-  const insertAfterSelection = useProgramStore((s) => s.insertAfterSelection);
-  const splitLine            = useProgramStore((s) => s.splitLine);
+  const insertAfterSelection  = useProgramStore((s) => s.insertAfterSelection);
+  const insertAboveSelection  = useProgramStore((s) => s.insertAboveSelection);
+  const splitLine             = useProgramStore((s) => s.splitLine);
   const joinLines            = useProgramStore((s) => s.joinLines);
   const deleteCommand        = useProgramStore((s) => s.deleteCommand);
 
@@ -696,14 +876,45 @@ export default function Canvas() {
   const dotSizes             = useSettingsStore((s) => s.dotSizes);
   const setLineThickness     = useSettingsStore((s) => s.setLineThickness);
   const setDotSize           = useSettingsStore((s) => s.setDotSize);
+  const bgImageSettingsMap   = useSettingsStore((s) => s.bgImageSettings);
   // Refs so event-handler callbacks (which close over stale state) always see current values
   const lineThicknessesRef   = useRef(lineThicknesses);
   const dotSizesRef          = useRef(dotSizes);
   useEffect(() => { lineThicknessesRef.current = lineThicknesses; }, [lineThicknesses]);
   useEffect(() => { dotSizesRef.current = dotSizes; }, [dotSizes]);
+  const layersPanelPositions   = useUIStore((s) => s.layersPanelPositions);
+  const setLayersPanelPosition = useUIStore((s) => s.setLayersPanelPosition);
+
   const activeParam      = useUIStore((s) => s.activeParam);
   const activeParamRef   = useRef(activeParam);
   useEffect(() => { activeParamRef.current = activeParam; }, [activeParam]);
+
+  const chainMode                = useUIStore((s) => s.chainMode);
+  const chainModeRef             = useRef(chainMode);
+  useEffect(() => { chainModeRef.current = chainMode; }, [chainMode]);
+
+  const pendingCommentText       = useUIStore((s) => s.pendingCommentText);
+  const setPendingCommentText    = useUIStore((s) => s.setPendingCommentText);
+  const pendingCommentTextRef    = useRef(pendingCommentText);
+  useEffect(() => { pendingCommentTextRef.current = pendingCommentText; }, [pendingCommentText]);
+
+  // ── Search overlay state ───────────────────────────────────────────────────
+  const searchQuery      = useUIStore((s) => s.searchQuery);
+  const searchMatchList  = useUIStore((s) => s.searchMatchList);
+  const searchFocusedIdx = useUIStore((s) => s.searchFocusedIdx);
+
+  /** IDs matching in the current pattern (null = no active search). */
+  const searchMatchIds = useMemo<Set<string> | undefined>(() => {
+    if (!searchQuery.trim() || searchMatchList.length === 0) return undefined;
+    return new Set(
+      searchMatchList
+        .filter((m) => m.patternName === null || m.patternName === selectedPatternName)
+        .map((m) => m.id),
+    );
+  }, [searchQuery, searchMatchList, selectedPatternName]);
+
+  const searchMatchIdsRef = useRef(searchMatchIds);
+  useEffect(() => { searchMatchIdsRef.current = searchMatchIds; }, [searchMatchIds]);
 
   // Placement mode refs (must be after activeTool declaration)
   const placementLineStartRef = useRef<[number, number, number] | null>(null);
@@ -759,6 +970,7 @@ export default function Canvas() {
   useEffect(() => {
     if (activeTool === 'new-line') { setPlacementPhase('line-start'); placementLineStartRef.current = null; }
     else if (activeTool === 'new-dot') { setPlacementPhase('dot'); }
+    else if (activeTool === 'new-comment') { setPlacementPhase(null); }
     else { setPlacementPhase(null); placementLineStartRef.current = null; }
   }, [activeTool]);
 
@@ -781,7 +993,13 @@ export default function Canvas() {
 
   const usedValves = useMemo(() => {
     const s = new Set<number>();
-    for (const c of commands) if (c.kind === 'Line' || c.kind === 'Dot') s.add(c.valve);
+    function collect(cmds: PatternCommand[]) {
+      for (const c of cmds) {
+        if (c.kind === 'Line' || c.kind === 'Dot') s.add(c.valve);
+        else if (c.kind === 'Group') collect(c.commands);
+      }
+    }
+    collect(commands);
     return s;
   }, [commands]);
 
@@ -802,6 +1020,72 @@ export default function Canvas() {
   // ── Background image element ──────────────────────────────────────────────
 
   const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+
+  // Per-file bg image settings and processed (filtered) image
+  const bgSettings = useMemo(
+    () => bgImageSettingsMap[filePath ?? ''] ?? DEFAULT_BG_IMAGE_SETTINGS,
+    [bgImageSettingsMap, filePath],
+  );
+  const processedImg = useMemo<HTMLImageElement | HTMLCanvasElement | null>(() => {
+    if (!imgEl) return null;
+    if (isDefaultBgSettings(bgSettings)) return imgEl;
+    return processImage(imgEl, bgSettings);
+  }, [imgEl, bgSettings]);
+
+  // Bg settings panel open state
+  const [bgSettingsOpen, setBgSettingsOpen] = useState(false);
+  const [bgSettingsAnchorRect, setBgSettingsAnchorRect] = useState<DOMRect | null>(null);
+
+  // ── Layers panel drag (20A) ───────────────────────────────────────────────
+  const layersPanelRef = useRef<HTMLDivElement>(null);
+  const [layersPanelPos, setLayersPanelPos] = useState<{ x: number; y: number } | null>(null);
+
+  // Restore saved position when the active pattern changes
+  useEffect(() => {
+    setLayersPanelPos(patternKey ? layersPanelPositions[patternKey] ?? null : null);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patternKey]);
+
+  const handleLayersHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const container = containerRef.current;
+    const panel     = layersPanelRef.current;
+    if (!container || !panel) return;
+
+    // Use actual DOM rect to capture the panel's current position regardless
+    // of whether it was placed by CSS (default top-right) or by saved state.
+    const panelRect     = panel.getBoundingClientRect();
+    const containerRect = container.getBoundingClientRect();
+    const startX = panelRect.left - containerRect.left;
+    const startY = panelRect.top  - containerRect.top;
+    const startMouseX = e.clientX;
+    const startMouseY = e.clientY;
+
+    const clamp = (nx: number, ny: number) => ({
+      x: Math.max(0, Math.min(container.clientWidth  - panel.clientWidth,  nx)),
+      y: Math.max(0, Math.min(container.clientHeight - panel.clientHeight, ny)),
+    });
+
+    const onMove = (ev: MouseEvent) => {
+      setLayersPanelPos(clamp(startX + ev.clientX - startMouseX, startY + ev.clientY - startMouseY));
+    };
+    const onUp = (ev: MouseEvent) => {
+      const pos = clamp(startX + ev.clientX - startMouseX, startY + ev.clientY - startMouseY);
+      setLayersPanelPos(pos);
+      if (patternKeyRef.current) setLayersPanelPosition(patternKeyRef.current, pos);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [setLayersPanelPosition]);
+
+  // ── Default Z from Mark commands (20B) ───────────────────────────────────
+  const defaultZ    = useMemo(() => extractDefaultZ(commands) ?? 0, [commands]);
+  const defaultZRef = useRef(defaultZ);
+  useEffect(() => { defaultZRef.current = defaultZ; }, [defaultZ]);
 
   // ── Calibration state ─────────────────────────────────────────────────────
 
@@ -827,6 +1111,12 @@ export default function Canvas() {
   useEffect(() => { scalingCalibIdxRef.current = scalingCalibIdx; }, [scalingCalibIdx]);
   useEffect(() => { fiducialsRef.current = fiducials; }, [fiducials]);
   useEffect(() => { patternKeyRef.current = patternKey; }, [patternKey]);
+
+  // Refs for stable ResizeObserver (20D/20E) — updated on every render
+  const isCalibratingRef2 = useRef(isCalibrating);
+  const imgElRef          = useRef(imgEl);
+  useEffect(() => { isCalibratingRef2.current = isCalibrating; }, [isCalibrating]);
+  useEffect(() => { imgElRef.current = imgEl; }, [imgEl]);
 
   useEffect(() => {
     if (!backgroundImage) { setImgEl(null); return; }
@@ -915,23 +1205,38 @@ export default function Canvas() {
       const cmdsToRender =
         isDraggingRef.current && dragWorkingCmdsRef.current !== null
           ? dragWorkingCmdsRef.current
+          : isGroupDraggingRef.current && dragWorkingCmdsRef.current !== null
+          ? dragWorkingCmdsRef.current
           : commands;
+
+      // When editing a closed area-fill polygon, hide existing commands whose
+      // key points fall inside the polygon so the semi-transparent preview is
+      // unobstructed.
+      const poly = areaFillPolygonRef.current;
+      const cmdsForFrame =
+        activeToolRef.current === 'area-fill' && areaFillClosedRef.current && poly.length >= 3
+          ? filterOutsidePolygon(cmdsToRender, poly)
+          : cmdsToRender;
+
+      const ghostCmds = isGroupDraggingRef.current ? groupDragGhostRef.current ?? undefined : undefined;
 
       renderFrame(
         ctx, canvas.width, canvas.height, cameraRef.current,
-        cmdsToRender, selectedCommandIds,
-        bgImageVisible ? imgEl : null,
+        cmdsForFrame, selectedCommandIds,
+        bgImageVisible ? processedImg : null,
         calibration?.transform ?? null, isCalibrating, calibPixels,
         calibScales, scalingCalibIdx, activeCalibIdx,
         hiddenValves,
         { lineThicknesses, dotSizes },
+        searchMatchIdsRef.current,
+        ghostCmds,
       );
 
       // Draw handles on top of the toolpath
       if (!isCalibrating && selectedCommandIds.size > 0) {
-        const expandedIds = expandSelectedIds(cmdsToRender, selectedCommandIds);
+        const expandedIds = expandSelectedIds(cmdsForFrame, selectedCommandIds);
         if (expandedIds.size > 0) {
-          const handles = computeHandles(cmdsToRender, expandedIds, cameraRef.current, lineThicknesses, dotSizes);
+          const handles = computeHandles(cmdsForFrame, expandedIds, cameraRef.current, lineThicknesses, dotSizes);
           if (handles.length > 0) drawHandles(ctx, handles, cameraRef.current);
         }
       }
@@ -944,8 +1249,9 @@ export default function Canvas() {
           ctx.save();
           ctx.globalAlpha = 0.45;
           const noSelection = new Set<string>();
+          const previewConnected = computeConnectedStarts(previewCmds);
           for (const cmd of previewCmds) {
-            drawCommand(ctx, cmd, cameraRef.current, noSelection);
+            drawCommand(ctx, cmd, cameraRef.current, noSelection, new Set(), previewConnected, { lineThicknesses, dotSizes });
           }
           ctx.restore();
         }
@@ -1024,7 +1330,43 @@ export default function Canvas() {
       }
     };
     requestAnimationFrame(drawRef.current);
-  }, [commands, selectedCommandIds, imgEl, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, lineThicknesses, dotSizes]);
+  }, [commands, selectedCommandIds, processedImg, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, lineThicknesses, dotSizes, searchMatchIds]);
+
+  // Pan canvas to center on the currently focused search match
+  useEffect(() => {
+    if (!searchMatchList.length) return;
+    const focused = searchMatchList[searchFocusedIdx];
+    if (!focused) return;
+    // Only pan for matches in the current pattern
+    if (focused.patternName !== null && focused.patternName !== selectedPatternName) return;
+
+    function findCmd(cmds: PatternCommand[], id: string): PatternCommand | null {
+      for (const c of cmds) {
+        if (c.id === id) return c;
+        if (c.kind === 'Group') { const f = findCmd(c.commands, id); if (f) return f; }
+      }
+      return null;
+    }
+    const cmd = findCmd(commands, focused.id);
+    if (!cmd) return;
+
+    let wx = 0, wy = 0, hasPt = false;
+    if (cmd.kind === 'Line') {
+      wx = (cmd.startPoint[0] + cmd.endPoint[0]) / 2;
+      wy = (cmd.startPoint[1] + cmd.endPoint[1]) / 2;
+      hasPt = true;
+    } else if (cmd.kind === 'Dot') {
+      wx = cmd.point[0]; wy = cmd.point[1]; hasPt = true;
+    }
+    if (!hasPt) return;
+
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width === 0) return;
+    const zoom = cameraRef.current.zoom;
+    cameraRef.current.panX = canvas.width  / 2 - wx * zoom;
+    cameraRef.current.panY = canvas.height / 2 - wy * zoom;
+    drawRef.current();
+  }, [searchFocusedIdx, searchMatchList, selectedPatternName, commands]);
 
   // Fit to view only when the selected pattern or file changes — not on every edit
   const fittedRef = useRef(false);
@@ -1056,7 +1398,8 @@ export default function Canvas() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPatternName, filePath, isCalibrating, setZoomLevel]);
 
-  // ResizeObserver
+  // ResizeObserver — stable ([] deps): uses refs so it never reconnects on state changes.
+  // This prevents undo/redo from clearing the canvas via observer reconnection (20D/20E).
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -1064,23 +1407,37 @@ export default function Canvas() {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const { width, height } = entry.contentRect;
-      canvas.width = Math.floor(width);
+      if (width === 0 || height === 0) return; // skip transient zero-size frames
+      const prevW = canvas.width;
+      const prevH = canvas.height;
+      canvas.width  = Math.floor(width);
       canvas.height = Math.floor(height);
       if (!fittedRef.current) {
-        const pts = isCalibrating && imgEl
-          ? [[0, 0], [imgEl.width, imgEl.height]] as [number, number][]
-          : collectPoints(commands);
+        const pts = isCalibratingRef2.current && imgElRef.current
+          ? [[0, 0], [imgElRef.current.width, imgElRef.current.height]] as [number, number][]
+          : collectPoints(commandsRef.current);
         if (pts.length > 0) {
           cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
           setZoomLevel(cameraRef.current.zoom);
           fittedRef.current = true;
         }
+      } else if (prevW > 0 && prevH > 0) {
+        // Preserve the viewport center point across resizes
+        const wx = (prevW / 2 - cameraRef.current.panX) / cameraRef.current.zoom;
+        const wy = (prevH / 2 - cameraRef.current.panY) / cameraRef.current.zoom;
+        cameraRef.current.panX = canvas.width  / 2 - wx * cameraRef.current.zoom;
+        cameraRef.current.panY = canvas.height / 2 - wy * cameraRef.current.zoom;
       }
-      requestAnimationFrame(drawRef.current);
+      // Draw synchronously — not via rAF — so the canvas is painted in the same
+      // browser rendering step that cleared it. Using rAF here would leave a
+      // blank frame visible during pane-resize drags (the browser paints the
+      // cleared canvas before the deferred callback fires).
+      drawRef.current();
     });
     obs.observe(container);
     return () => obs.disconnect();
-  }, [commands, isCalibrating, imgEl, setZoomLevel]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Cleanup any in-progress drag on unmount
   useEffect(() => {
@@ -1099,6 +1456,7 @@ export default function Canvas() {
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && activeToolRef.current) {
         if (activeToolRef.current === 'area-fill') clearAreaFill();
+        if (activeToolRef.current === 'new-comment') setPendingCommentText('');
         splitHoverRef.current  = null;
         joinHoverRef.current   = null;
         deleteHoverRef.current = null;
@@ -1125,7 +1483,7 @@ export default function Canvas() {
       window.removeEventListener('keydown', onKeyDown);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [setActiveTool]);
+  }, [setActiveTool, clearAreaFill, setPendingCommentText]);
 
   // Wheel zoom
   useEffect(() => {
@@ -1391,6 +1749,71 @@ export default function Canvas() {
     };
   }, [setProgram]);
 
+  // ── Group drag helper ─────────────────────────────────────────────────────
+
+  const startGroupDrag = useCallback((startSx: number, startSy: number) => {
+    const cmds = commandsRef.current;
+    const selIds = selectedCommandIdsRef.current;
+
+    // Snapshot original commands as ghost; working copy for live preview
+    groupDragGhostRef.current  = cmds;
+    dragWorkingCmdsRef.current = deepCloneCommands(cmds);
+    isGroupDraggingRef.current = true;
+
+    const [startWx, startWy] = screenToWorld(startSx, startSy, cameraRef.current);
+    groupDragStartRef.current = { sx: startSx, sy: startSy, startWx, startWy };
+
+    if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+
+    const handleGroupDragMove = (e: MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !groupDragStartRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const [wx, wy] = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cameraRef.current);
+      const dx = wx - groupDragStartRef.current.startWx;
+      const dy = wy - groupDragStartRef.current.startWy;
+      const base = groupDragGhostRef.current ?? commandsRef.current;
+      dragWorkingCmdsRef.current = applyMoveDelta(base, selIds, dx, dy);
+      requestAnimationFrame(drawRef.current);
+    };
+
+    const handleGroupDragUp = (e: MouseEvent) => {
+      isGroupDraggingRef.current = false;
+
+      if (groupDragStartRef.current) {
+        const canvas = canvasRef.current;
+        const rect = canvas?.getBoundingClientRect();
+        if (rect) {
+          const [wx, wy] = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cameraRef.current);
+          const dx = wx - groupDragStartRef.current.startWx;
+          const dy = wy - groupDragStartRef.current.startWy;
+          if (Math.abs(dx) > 1e-6 || Math.abs(dy) > 1e-6) {
+            moveSelection(dx, dy);
+          }
+        }
+      }
+
+      dragWorkingCmdsRef.current = null;
+      groupDragGhostRef.current  = null;
+      groupDragStartRef.current  = null;
+
+      if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+
+      window.removeEventListener('mousemove', handleGroupDragMove);
+      window.removeEventListener('mouseup',   handleGroupDragUp);
+      groupDragCleanupRef.current = null;
+
+      requestAnimationFrame(drawRef.current);
+    };
+
+    window.addEventListener('mousemove', handleGroupDragMove);
+    window.addEventListener('mouseup',   handleGroupDragUp);
+    groupDragCleanupRef.current = () => {
+      window.removeEventListener('mousemove', handleGroupDragMove);
+      window.removeEventListener('mouseup',   handleGroupDragUp);
+    };
+  }, [moveSelection]);
+
   // ── Mouse down ────────────────────────────────────────────────────────────
 
   const onMouseDown = useCallback(
@@ -1562,29 +1985,47 @@ export default function Canvas() {
           if (activeToolRef.current === 'new-dot') {
             const newCmd: DotCommand = {
               kind: 'Dot', id: genId(),
-              valve: activeParamRef.current, point: [wx, wy, 0],
+              valve: activeParamRef.current, point: [wx, wy, defaultZRef.current],
               disabled: false, valveState: 'ValveOn',
             };
-            insertAfterSelection(newCmd, 'Create dot');
-            setActiveTool(null);
+            insertAboveSelection(newCmd, 'Add dot');
+            // Continuous placement — keep tool active, don't call setActiveTool(null)
             return;
           }
 
           if (activeToolRef.current === 'new-line') {
             if (phase === 'line-start') {
-              placementLineStartRef.current = [wx, wy, 0];
+              placementLineStartRef.current = [wx, wy, defaultZRef.current];
               setPlacementPhase('line-end');
             } else if (phase === 'line-end' && placementLineStartRef.current) {
+              const endPt: [number, number, number] = [wx, wy, defaultZRef.current];
               const newCmd: LineCommand = {
                 kind: 'Line', id: genId(),
                 valve: activeParamRef.current,
                 startPoint: placementLineStartRef.current,
-                endPoint: [wx, wy, 0],
+                endPoint: endPt,
                 disabled: false,
                 flowRate: { value: 0.5, unit: 'mg/mm' },
               };
-              insertAfterSelection(newCmd, 'Create line');
-              setActiveTool(null);
+              insertAboveSelection(newCmd, 'Add line');
+              // Continuous: in chain mode carry endpoint forward; otherwise reset to start
+              if (chainModeRef.current) {
+                placementLineStartRef.current = endPt;
+                setPlacementPhase('line-end');
+              } else {
+                placementLineStartRef.current = null;
+                setPlacementPhase('line-start');
+              }
+            }
+            return;
+          }
+
+          if (activeToolRef.current === 'new-comment') {
+            const txt = pendingCommentTextRef.current.trim();
+            if (txt) {
+              const newCmd = { kind: 'Comment' as const, id: genId(), text: txt };
+              insertAboveSelection(newCmd, 'Add comment');
+              setPendingCommentText('');
             }
             return;
           }
@@ -1599,6 +2040,24 @@ export default function Canvas() {
             if (hitHandle) {
               startHandleDrag(hitHandle, sx, sy);
               return; // don't touch selection
+            }
+          }
+        }
+
+        // ── Group drag: selected body hit → move all selected ─────────────
+        if (selectedCommandIds.size > 0 && !e.ctrlKey && !e.metaKey && !e.shiftKey) {
+          const hitIdx = hitTest(sx, sy, commands, cameraRef.current);
+          if (hitIdx !== null) {
+            const hitCmd = commands[hitIdx];
+            // Check if the hit command is selected, or is a group containing a selected child
+            function hasSelectedDescendant(cmd: PatternCommand): boolean {
+              if (cmd.id && selectedCommandIds.has(cmd.id)) return true;
+              if (cmd.kind === 'Group') return cmd.commands.some(hasSelectedDescendant);
+              return false;
+            }
+            if (hasSelectedDescendant(hitCmd)) {
+              startGroupDrag(sx, sy);
+              return;
             }
           }
         }
@@ -1628,11 +2087,12 @@ export default function Canvas() {
       isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx,
       commands, selectedCommandIds,
       selectOne, selectToggle, selectRange, clearSelection,
-      imgEl, startHandleDrag, startCalibScaleDrag,
-      insertAfterSelection, setActiveTool, placementPhase,
+      imgEl, startHandleDrag, startCalibScaleDrag, startGroupDrag,
+      insertAfterSelection, insertAboveSelection, setActiveTool, placementPhase,
       setAreaFillPolygon, startPolyDrag,
       splitLine, joinLines, deleteCommand,
       lineThicknesses, dotSizes,
+      setPendingCommentText,
     ],
   );
 
@@ -1727,15 +2187,29 @@ export default function Canvas() {
         return;
       }
 
-      // Change cursor when hovering over a handle
-      if (!isDraggingRef.current && !isCalibrating && selectedCommandIdsRef.current.size > 0) {
+      // Change cursor when hovering over a handle or selected body
+      if (!isDraggingRef.current && !isGroupDraggingRef.current && !isCalibrating && selectedCommandIdsRef.current.size > 0) {
         const cmds = commandsRef.current;
-        const expIds = expandSelectedIds(cmds, selectedCommandIdsRef.current);
+        const selIds = selectedCommandIdsRef.current;
+        const expIds = expandSelectedIds(cmds, selIds);
         if (expIds.size > 0) {
           const handles = computeHandles(cmds, expIds, cameraRef.current, lineThicknessesRef.current, dotSizesRef.current);
           const onHandle = hitTestHandle(sx, sy, handles, cameraRef.current) !== null;
-          if (canvasRef.current) {
-            canvasRef.current.style.cursor = onHandle ? 'grab' : 'crosshair';
+          if (onHandle) {
+            if (canvasRef.current) canvasRef.current.style.cursor = 'grab';
+          } else {
+            // Check if hovering over a selected command body
+            const hitIdx = hitTest(sx, sy, cmds, cameraRef.current);
+            const onSelectedBody = hitIdx !== null && (() => {
+              const hitCmd = cmds[hitIdx];
+              function isOrHasSelected(c: PatternCommand): boolean {
+                if (c.id && selIds.has(c.id)) return true;
+                if (c.kind === 'Group') return c.commands.some(isOrHasSelected);
+                return false;
+              }
+              return isOrHasSelected(hitCmd);
+            })();
+            if (canvasRef.current) canvasRef.current.style.cursor = onSelectedBody ? 'move' : 'crosshair';
           }
         }
       }
@@ -1931,6 +2405,18 @@ export default function Canvas() {
           dotSizes={dotSizes}
           onLineThicknessChange={setLineThickness}
           onDotSizeChange={setDotSize}
+          onOpenBgSettings={(rect) => { setBgSettingsAnchorRect(rect); setBgSettingsOpen(true); }}
+          position={layersPanelPos}
+          onHeaderMouseDown={handleLayersHeaderMouseDown}
+          panelRef={layersPanelRef}
+        />
+      )}
+
+      {bgSettingsOpen && bgSettingsAnchorRect && filePath && (
+        <BgImageSettingsPanel
+          filePath={filePath}
+          anchorRect={bgSettingsAnchorRect}
+          onClose={() => setBgSettingsOpen(false)}
         />
       )}
 

@@ -1,8 +1,10 @@
 import { create } from 'zustand';
-import type { Program, Pattern, PatternCommand, LineCommand, GroupNode } from '@lib/types';
+import type { Program, Pattern, PatternCommand, LineCommand, DotCommand, CommentCommand, GroupNode } from '@lib/types';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
 import { MYD_DEFAULT } from '@lib/syntax-profiles';
+import { applyReplace } from '@lib/search';
+import type { SearchMatch } from '@lib/search';
 
 const MAX_HISTORY = 200;
 
@@ -83,6 +85,39 @@ function removeSelected(cmds: PatternCommand[], ids: Set<string>): PatternComman
     );
 }
 
+/**
+ * Replace the command identified by `id` anywhere in the tree with the
+ * result of applying `applyReplace`. Returns the modified list or null if
+ * the command was not found or the replacement was not applicable.
+ */
+function replaceSearchMatch(
+  cmds: PatternCommand[],
+  id: string,
+  queryLower: string,
+  replacement: string,
+): PatternCommand[] | null {
+  for (let i = 0; i < cmds.length; i++) {
+    if (cmds[i].id === id) {
+      const replaced = applyReplace(cmds[i], queryLower, replacement);
+      if (!replaced) return null;
+      return [...cmds.slice(0, i), replaced, ...cmds.slice(i + 1)];
+    }
+    if (cmds[i].kind === 'Group') {
+      const inner = replaceSearchMatch(
+        (cmds[i] as GroupNode).commands, id, queryLower, replacement,
+      );
+      if (inner) {
+        return [
+          ...cmds.slice(0, i),
+          { ...(cmds[i] as GroupNode), commands: inner },
+          ...cmds.slice(i + 1),
+        ];
+      }
+    }
+  }
+  return null;
+}
+
 /** Deep-clone and assign fresh IDs to a command list. */
 function reIdCommands(cmds: PatternCommand[]): PatternCommand[] {
   return cmds.map((cmd): PatternCommand => {
@@ -125,6 +160,12 @@ interface ProgramStore {
   jumpToHistory: (index: number) => void;
   insertAfterSelection: (cmd: PatternCommand, label?: string) => void;
   bulkInsertAfterSelection: (cmds: PatternCommand[], label?: string) => void;
+  /**
+   * Insert a single command ABOVE the first selected command (or at the end
+   * if nothing is selected). Used by New Line, New Dot, and New Comment tools.
+   * After insertion the new command becomes the selection.
+   */
+  insertAboveSelection: (cmd: PatternCommand, label?: string) => void;
   mergeEndToStart: () => void;
   mergeStartToEnd: () => void;
   disconnectLines: () => void;
@@ -146,6 +187,42 @@ interface ProgramStore {
   reorderCommands: (draggedIds: string[], insertBeforeId: string | null, targetGroupId: string | null) => void;
   /** Delete a single command by ID (does not require it to be selected). */
   deleteCommand: (id: string) => void;
+  /** Rename a Group command by ID. */
+  renameGroup: (id: string, newName: string) => void;
+  /**
+   * Shift all selected dispense commands (Line, Dot) and selected Groups by
+   * (dx, dy) in world-space mm. Area-fill polygon metadata is updated in-place
+   * so re-editing the group loads the correct polygon position.
+   * Creates one undo history entry: "Move N commands".
+   */
+  moveSelection: (dx: number, dy: number) => void;
+
+  // ── Search Replace ────────────────────────────────────────────────────────
+  /**
+   * Apply a text replacement to each of the given search matches.
+   * Matches that cannot be replaced (metadata, unrecognised kind) are skipped.
+   * Returns the number of successfully replaced commands.
+   * Pushes a single history entry with the provided label.
+   */
+  applySearchReplace: (
+    matches: SearchMatch[],
+    query: string,
+    replacement: string,
+    label: string,
+  ) => number;
+
+  // ── Plain-text editing ────────────────────────────────────────────────────
+  /**
+   * Apply a successful parse result from the plain-text editor for a named
+   * pattern. Coalesces into the previous history entry when it was also a
+   * text edit within the last 2 seconds.
+   */
+  applyPatternTextEdit: (patternName: string, commands: PatternCommand[]) => void;
+  /**
+   * Apply a successful parse result from the plain-text editor for the main
+   * block. Same coalescing behaviour as applyPatternTextEdit.
+   */
+  applyMainTextEdit: (newMain: import('@lib/types').MainBlock) => void;
 
   // ── Clipboard ────────────────────────────────────────────────────────────
   clipboard: PatternCommand[] | null;
@@ -365,6 +442,34 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     });
   },
 
+  insertAboveSelection: (cmd: PatternCommand, label = 'Insert command') => {
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    let insertIdx = pattern.commands.findIndex((c) => c.id && selectedCommandIds.has(c.id));
+    if (insertIdx === -1) insertIdx = pattern.commands.length;
+    const newCmds = [
+      ...pattern.commands.slice(0, insertIdx),
+      cmd,
+      ...pattern.commands.slice(insertIdx),
+    ];
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === selectedPatternName ? { ...p, commands: newCmds } : p,
+      ),
+    };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    set({
+      program: newProgram, isDirty: true,
+      historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
+      selectedCommandIds: cmd.id ? new Set([cmd.id]) : new Set<string>(),
+      lastSelectedId: cmd.id ?? null,
+    });
+  },
+
   mergeEndToStart: () => {
     const { program, selectedPatternName, selectedCommandIds } = get();
     if (!program || !selectedPatternName) return;
@@ -556,6 +661,41 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       selectedCommandIds: newCmd.id ? new Set([newCmd.id]) : new Set<string>(),
       lastSelectedId: newCmd.id ?? null,
     });
+  },
+
+  applySearchReplace: (matches, query, replacement, label) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program) return 0;
+
+    const queryLower = query.trim().toLowerCase();
+    if (!queryLower) return 0;
+
+    // Work on mutable copies of each pattern's command list
+    const patternCmds = new Map<string, PatternCommand[]>();
+    for (const p of program.patterns) patternCmds.set(p.name, [...p.commands]);
+
+    let count = 0;
+    for (const match of matches) {
+      const pName = match.patternName ?? selectedPatternName;
+      if (!pName) continue;
+      const cmds = patternCmds.get(pName);
+      if (!cmds) continue;
+      const next = replaceSearchMatch(cmds, match.id, queryLower, replacement);
+      if (next) { patternCmds.set(pName, next); count++; }
+    }
+
+    if (count === 0) return 0;
+
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) => {
+        const newCmds = patternCmds.get(p.name);
+        return newCmds && newCmds !== p.commands ? { ...p, commands: newCmds } : p;
+      }),
+    };
+    const h = pushEntry(historyEntries, historyCurrentIndex, label, newProgram);
+    set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+    return count;
   },
 
   splitLine: (cmdId: string, splitPoint: [number, number, number]) => {
@@ -772,6 +912,145 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       historyEntries: h.entries, historyCurrentIndex: h.currentIndex,
       selectedCommandIds: new Set<string>(), lastSelectedId: null,
     });
+  },
+
+  renameGroup: (id: string, newName: string) => {
+    const { program, selectedPatternName, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+    function applyRename(cmds: PatternCommand[]): PatternCommand[] {
+      return cmds.map((c) => {
+        if (c.kind === 'Group' && c.id === id) return { ...c, name: newName };
+        if (c.kind === 'Group') return { ...c, commands: applyRename(c.commands) };
+        return c;
+      });
+    }
+    const newCmds = applyRename(pattern.commands);
+    const newProgram = { ...program, patterns: program.patterns.map((p) => p.name === selectedPatternName ? { ...p, commands: newCmds } : p) };
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Rename group "${newName}"`, newProgram);
+    set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+  },
+
+  moveSelection: (dx: number, dy: number) => {
+    const { program, selectedPatternName, selectedCommandIds, historyEntries, historyCurrentIndex } = get();
+    if (!program || !selectedPatternName) return;
+    if (selectedCommandIds.size === 0) return;
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) return;
+
+    const pattern = program.patterns.find((p) => p.name === selectedPatternName);
+    if (!pattern) return;
+
+    const AREA_FILL_PREFIX = '##AREA_FILL_CONFIG:';
+
+    /** Shift polygon coords in an area-fill config comment. */
+    function shiftAreaFillComment(cmd: CommentCommand): CommentCommand {
+      if (!cmd.text.startsWith(AREA_FILL_PREFIX)) return cmd;
+      try {
+        const body = cmd.text.slice(AREA_FILL_PREFIX.length);
+        const fields: Record<string, string> = {};
+        body.split('|').forEach((f) => {
+          const eq = f.indexOf('=');
+          if (eq !== -1) fields[f.slice(0, eq)] = f.slice(eq + 1);
+        });
+        if (!fields.polygon) return cmd;
+        const shiftedPoly = fields.polygon
+          .split(';')
+          .map((pt) => {
+            const [x, y] = pt.split(',').map(Number);
+            return `${x + dx},${y + dy}`;
+          })
+          .join(';');
+        fields.polygon = shiftedPoly;
+        const newBody = Object.entries(fields)
+          .map(([k, v]) => `${k}=${v}`)
+          .join('|');
+        return { ...cmd, text: `${AREA_FILL_PREFIX}${newBody}` };
+      } catch {
+        return cmd;
+      }
+    }
+
+    function applyMoveToCmd(cmd: PatternCommand): PatternCommand {
+      if (cmd.kind === 'Line') {
+        return {
+          ...cmd,
+          startPoint: [cmd.startPoint[0] + dx, cmd.startPoint[1] + dy, cmd.startPoint[2]],
+          endPoint:   [cmd.endPoint[0]   + dx, cmd.endPoint[1]   + dy, cmd.endPoint[2]],
+          _raw: undefined,
+        };
+      }
+      if (cmd.kind === 'Dot') {
+        return {
+          ...cmd,
+          point: [cmd.point[0] + dx, cmd.point[1] + dy, cmd.point[2]],
+          _rawPoint: undefined,
+        };
+      }
+      if (cmd.kind === 'Comment') {
+        return shiftAreaFillComment(cmd);
+      }
+      if (cmd.kind === 'Group') {
+        return { ...cmd, commands: cmd.commands.map(applyMoveToCmd) };
+      }
+      return cmd;
+    }
+
+    function applyMoveToList(cmds: PatternCommand[]): PatternCommand[] {
+      return cmds.map((cmd) => {
+        if (cmd.id && selectedCommandIds.has(cmd.id)) return applyMoveToCmd(cmd);
+        if (cmd.kind === 'Group') {
+          return { ...cmd, commands: applyMoveToList(cmd.commands) };
+        }
+        return cmd;
+      });
+    }
+
+    const newCmds = applyMoveToList(pattern.commands);
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === selectedPatternName ? { ...p, commands: newCmds } : p,
+      ),
+    };
+    const n = selectedCommandIds.size;
+    const h = pushEntry(historyEntries, historyCurrentIndex, `Move ${n} command${n > 1 ? 's' : ''}`, newProgram);
+    set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+  },
+
+  applyPatternTextEdit: (patternName, commands) => {
+    const { program, historyEntries, historyCurrentIndex } = get();
+    if (!program) return;
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === patternName ? { ...p, commands } : p,
+      ),
+    };
+    const lastEntry = historyEntries[historyCurrentIndex];
+    if (lastEntry && lastEntry.label === 'Edit pattern text' && Date.now() - lastEntry.timestamp < 2000) {
+      const newEntries = [...historyEntries];
+      newEntries[historyCurrentIndex] = { ...lastEntry, snapshot: structuredClone(newProgram), timestamp: Date.now() };
+      set({ program: newProgram, isDirty: true, historyEntries: newEntries });
+    } else {
+      const h = pushEntry(historyEntries, historyCurrentIndex, 'Edit pattern text', newProgram);
+      set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+    }
+  },
+
+  applyMainTextEdit: (newMain) => {
+    const { program, historyEntries, historyCurrentIndex } = get();
+    if (!program) return;
+    const newProgram = { ...program, main: newMain };
+    const lastEntry = historyEntries[historyCurrentIndex];
+    if (lastEntry && lastEntry.label === 'Edit pattern text' && Date.now() - lastEntry.timestamp < 2000) {
+      const newEntries = [...historyEntries];
+      newEntries[historyCurrentIndex] = { ...lastEntry, snapshot: structuredClone(newProgram), timestamp: Date.now() };
+      set({ program: newProgram, isDirty: true, historyEntries: newEntries });
+    } else {
+      const h = pushEntry(historyEntries, historyCurrentIndex, 'Edit pattern text', newProgram);
+      set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+    }
   },
 
   copySelection: () => {

@@ -3,7 +3,7 @@
  * Fixed 40px width, icon buttons stacked top-to-bottom.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { useProgramStore } from '../store/program-store';
+import { useProgramStore, genId } from '../store/program-store';
 import { useUIStore } from '../store/ui-store';
 import AreaFillPanel, { useAnchorRect } from './AreaFillPanel';
 import { valveColor } from './visualization/renderers';
@@ -26,6 +26,18 @@ function NewDotIcon() {
       <circle cx="7.5" cy="7.5" r="4" />
       <line x1="13" y1="10" x2="13" y2="16" />
       <line x1="10" y1="13" x2="16" y2="13" />
+    </svg>
+  );
+}
+
+function NewCommentIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Speech bubble */}
+      <path d="M2 3.5Q2 2.5 3 2.5L14 2.5Q15 2.5 15 3.5L15 10Q15 11 14 11L9 11L6.5 13.5L6.5 11L3 11Q2 11 2 10Z" />
+      {/* + badge */}
+      <line x1="13" y1="5" x2="13" y2="9" />
+      <line x1="11" y1="7" x2="15" y2="7" />
     </svg>
   );
 }
@@ -196,6 +208,95 @@ function ParamSelector({ activeParam, setActiveParam }: ParamSelectorProps) {
   );
 }
 
+// ── Comment Tool Prompt ────────────────────────────────────────────────────────
+
+const RESERVED_PREFIXES = ['##GROUP:', '##ENDGROUP:', '##AREA_FILL_CONFIG:'];
+
+interface CommentToolPromptProps {
+  value: string;
+  onChange: (text: string) => void;
+  onPlace: (text: string) => void;
+  onCancel: () => void;
+}
+
+function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPromptProps) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  const handlePlace = () => {
+    const txt = value.trim();
+    if (!txt) return;
+    const reserved = RESERVED_PREFIXES.find((p) => txt.startsWith(p));
+    if (reserved) {
+      setToast('This comment syntax is reserved for internal use. Please use different text.');
+      setTimeout(() => setToast(null), 3500);
+      return;
+    }
+    onPlace(txt);
+  };
+
+  const handleKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') { handlePlace(); }
+    if (e.key === 'Escape') { onCancel(); }
+    e.stopPropagation();
+  };
+
+  return (
+    <div className="absolute right-full top-0 mr-1.5 z-50 flex flex-col gap-1">
+      <div
+        className="flex items-center bg-gray-800 border border-gray-600 rounded shadow-xl"
+        style={{ minWidth: 200 }}
+      >
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={handleKey}
+          placeholder="Enter comment text…"
+          className="flex-1 bg-transparent px-2 py-1 text-xs text-gray-100 focus:outline-none placeholder-gray-500"
+        />
+        <button
+          onClick={handlePlace}
+          disabled={!value.trim()}
+          className="px-2 py-1 text-[10px] text-blue-400 hover:text-blue-300 disabled:opacity-30 disabled:cursor-default border-l border-gray-600"
+          title="Place comment (Enter)"
+        >
+          ✓
+        </button>
+      </div>
+      {toast && (
+        <div className="bg-red-900 border border-red-600 text-red-100 text-[10px] px-2 py-1 rounded shadow-xl leading-tight" style={{ maxWidth: 220 }}>
+          {toast}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Chain Mode Checkbox ────────────────────────────────────────────────────────
+
+function ChainModeCheckbox({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <div className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50">
+      <label
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap cursor-pointer select-none"
+        style={{ background: 'rgba(15,20,30,0.92)', border: '1px solid #ffffff22', color: checked ? '#93c5fd' : '#9ca3af' }}
+        title="Chain mode: connect lines end-to-start"
+      >
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          className="w-2.5 h-2.5 accent-blue-500"
+        />
+        Chain
+      </label>
+    </div>
+  );
+}
+
 // ── Tool Button ────────────────────────────────────────────────────────────────
 
 interface ToolButtonProps {
@@ -311,6 +412,11 @@ export default function ToolPanel() {
   const setAreaFillEditGroupId = useUIStore((s) => s.setAreaFillEditGroupId);
   const activeParam            = useUIStore((s) => s.activeParam);
   const setActiveParam         = useUIStore((s) => s.setActiveParam);
+  const chainMode              = useUIStore((s) => s.chainMode);
+  const setChainMode           = useUIStore((s) => s.setChainMode);
+  const pendingCommentText     = useUIStore((s) => s.pendingCommentText);
+  const setPendingCommentText  = useUIStore((s) => s.setPendingCommentText);
+  const insertAboveSelection   = useProgramStore((s) => s.insertAboveSelection);
 
   const toolPanelRef = useRef<HTMLDivElement>(null);
   const anchorRect   = useAnchorRect(toolPanelRef as React.RefObject<HTMLElement>);
@@ -374,23 +480,31 @@ export default function ToolPanel() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item') => {
+  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item') => {
     if (activeTool === tool) {
       setActiveTool(null);
       if (tool === 'area-fill') clearAreaFill();
+      if (tool === 'new-comment') setPendingCommentText('');
     } else {
       if (activeTool === 'area-fill') clearAreaFill();
+      if (activeTool === 'new-comment') setPendingCommentText('');
       if (tool === 'area-fill' && selectedGroup?.id) {
         setAreaFillEditGroupId(selectedGroup.id);
       }
       setActiveTool(tool);
     }
-  }, [activeTool, setActiveTool, clearAreaFill, setAreaFillEditGroupId, selectedGroup]);
+  }, [activeTool, setActiveTool, clearAreaFill, setAreaFillEditGroupId, selectedGroup, setPendingCommentText]);
 
   const handleGroupConfirm = useCallback((name: string) => {
     groupSelection(name);
     setGroupPromptOpen(false);
   }, [groupSelection]);
+
+  const handlePlaceComment = useCallback((text: string) => {
+    const newCmd = { kind: 'Comment' as const, id: genId(), text };
+    insertAboveSelection(newCmd, 'Add comment');
+    setPendingCommentText(''); // clear for next placement, keep tool active
+  }, [insertAboveSelection, setPendingCommentText]);
 
   // Close group prompt on Escape
   useEffect(() => {
@@ -413,25 +527,45 @@ export default function ToolPanel() {
       <div className="relative">
         <ToolButton
           icon={<NewLineIcon />}
-          label="New Line (click 2 points)"
+          label="New Line (click 2 points; Esc to stop)"
           active={activeTool === 'new-line'}
           disabled={!canEdit}
           onClick={() => toggleTool('new-line')}
         />
         {activeTool === 'new-line' && (
-          <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+          <>
+            <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+            <ChainModeCheckbox checked={chainMode} onChange={setChainMode} />
+          </>
         )}
       </div>
       <div className="relative">
         <ToolButton
           icon={<NewDotIcon />}
-          label="New Dot (click to place)"
+          label="New Dot (click to place; Esc to stop)"
           active={activeTool === 'new-dot'}
           disabled={!canEdit}
           onClick={() => toggleTool('new-dot')}
         />
         {activeTool === 'new-dot' && (
           <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+        )}
+      </div>
+      <div className="relative">
+        <ToolButton
+          icon={<NewCommentIcon />}
+          label="New Comment"
+          active={activeTool === 'new-comment'}
+          disabled={!canEdit}
+          onClick={() => toggleTool('new-comment')}
+        />
+        {activeTool === 'new-comment' && (
+          <CommentToolPrompt
+            value={pendingCommentText}
+            onChange={setPendingCommentText}
+            onPlace={handlePlaceComment}
+            onCancel={() => toggleTool('new-comment')}
+          />
         )}
       </div>
 

@@ -10,8 +10,9 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "vitest run && tsc --noEmit -p tsconfig.src.json",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.src.json"
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.4.0",

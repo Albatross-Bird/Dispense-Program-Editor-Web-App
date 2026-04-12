@@ -45,12 +45,46 @@ export const MYD_DEFAULT: SyntaxProfile = {
     dotAllowsValveOff: true,
   },
   serializeOverrides: {
-    // Preserve the unusual .EndTEMP token used by the current MYD software.
-    // The serializer falls back to the token stored in Program.pattListEndToken
-    // when this override is absent, so most callers do not need to set it.
     lineEnding: '\r\n',
   },
 };
+
+/** MYC V1.0 — same parser/serializer logic as MYD for now. */
+export const MYC_V1: SyntaxProfile = {
+  softwareType: 'MYC',
+  version: '1.0',
+  parseOverrides: {
+    dotAllowsValveOff: true,
+  },
+  serializeOverrides: {
+    lineEnding: '\r\n',
+  },
+};
+
+/** MYT V1.0 — same parser/serializer logic as MYD for now. */
+export const MYT_V1: SyntaxProfile = {
+  softwareType: 'MYT',
+  version: '1.0',
+  parseOverrides: {
+    dotAllowsValveOff: true,
+  },
+  serializeOverrides: {
+    lineEnding: '\r\n',
+  },
+};
+
+/** All registered profiles in display order. */
+export const PROFILES: SyntaxProfile[] = [MYD_DEFAULT, MYC_V1, MYT_V1];
+
+/** Look up a profile by softwareType + version, falling back to MYD_DEFAULT. */
+export function getProfile(softwareType: SoftwareType, version: string): SyntaxProfile {
+  return PROFILES.find((p) => p.softwareType === softwareType && p.version === version) ?? MYD_DEFAULT;
+}
+
+/** Human-readable display name for a profile, e.g. "MYD V1.0". */
+export function profileLabel(p: SyntaxProfile): string {
+  return `${p.softwareType} V${p.version}`;
+}
 
 /**
  * Resolve the effective pattListEndToken for serialization.

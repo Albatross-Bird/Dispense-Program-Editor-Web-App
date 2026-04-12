@@ -15,10 +15,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useUIStore } from '../store/ui-store';
+import { useSettingsStore } from '../store/settings-store';
 import { useProgramStore, genId } from '../store/program-store';
+import NumberInput from './NumberInput';
 import { generateAreaFill, type AreaFillConfig } from '@lib/area-fill';
 import type { CommentCommand, GroupNode, PatternCommand } from '@lib/types';
 import { extractDefaultZ } from './visualization/renderers';
+import { useT } from '../hooks/useT';
 
 // ── Area fill config comment — persisted inside the group in the .prg file ────
 // Format stored as a CommentCommand with text: "##AREA_FILL_CONFIG:..."
@@ -39,6 +42,7 @@ function serializeConfigComment(polygon: [number, number][], config: PanelConfig
     `param=${config.param}`,
     `startCorner=${config.startCorner}`,
     `flowRate=${config.flowRate}`,
+    `name=${config.name}`,
   ].join('|');
   return { kind: 'Comment', id: genId(), text };
 }
@@ -78,6 +82,12 @@ function parseConfigComment(
         param:       Number(fields.param)       || 1,
         startCorner: (fields.startCorner as 'TL'|'TR'|'BL'|'BR') ?? 'BL',
         flowRate:    Number(fields.flowRate)    || 0.5,
+        name:        (() => {
+          const raw = fields.name ?? '';
+          if (raw === 'Area Fill') return '';
+          if (raw.startsWith('Area Fill - ')) return raw.slice('Area Fill - '.length);
+          return raw;
+        })(),
       },
     };
   } catch {
@@ -96,6 +106,7 @@ interface PanelConfig {
   startCorner: 'TL' | 'TR' | 'BL' | 'BR';
   param: number;
   flowRate: number;
+  name: string;
 }
 
 const DEFAULT_CONFIG: PanelConfig = {
@@ -107,41 +118,13 @@ const DEFAULT_CONFIG: PanelConfig = {
   startCorner: 'BL',
   param: 1,
   flowRate: 0.5,
+  name: '',
 };
 
 // ── Sub-components ─────────────────────────────────────────────────────────────
 
 function Label({ children }: { children: React.ReactNode }) {
   return <div className="text-[10px] text-gray-400 mb-0.5">{children}</div>;
-}
-
-function NumberInput({
-  value,
-  min,
-  max,
-  step,
-  onChange,
-}: {
-  value: number;
-  min?: number;
-  max?: number;
-  step?: number;
-  onChange: (v: number) => void;
-}) {
-  return (
-    <input
-      type="number"
-      value={value}
-      min={min}
-      max={max}
-      step={step ?? 0.1}
-      onChange={(e) => {
-        const v = parseFloat(e.target.value);
-        if (!isNaN(v)) onChange(v);
-      }}
-      className="w-full bg-gray-700 border border-gray-600 rounded px-2 py-1 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
-    />
-  );
 }
 
 // ── Rotation Dial ─────────────────────────────────────────────────────────────
@@ -291,6 +274,7 @@ interface AreaFillPanelProps {
 }
 
 export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelProps) {
+  const t                     = useT();
   const areaFillPolygon       = useUIStore((s) => s.areaFillPolygon);
   const areaFillClosed        = useUIStore((s) => s.areaFillClosed);
   const clearAreaFill         = useUIStore((s) => s.clearAreaFill);
@@ -321,10 +305,16 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
   const defaultZ = React.useMemo(() => extractDefaultZ(patternCommands) ?? 0, [patternCommands]);
 
   const [config, setConfig] = useState<PanelConfig>(() => {
-    // Will be updated via useEffect when editGroup is available.
-    // For new fills, seed zHeight from Mark commands.
-    return { ...DEFAULT_CONFIG, zHeight: 0 }; // defaultZ not available at init; set via effect below
+    // Seed param and spacing from current tool settings (new fill only;
+    // edit mode overrides via the editGroup effect below).
+    const ap = useUIStore.getState().activeParam;
+    const ds = useSettingsStore.getState().dotSizes;
+    const size = ds[ap - 1] ?? 1.0;
+    const spacing = Math.max(0.1, parseFloat((size * 1.5).toFixed(2)));
+    return { ...DEFAULT_CONFIG, param: ap, xSpacing: spacing, ySpacing: spacing };
   });
+
+  const [lockXY, setLockXY] = useState(true);
 
   const setAreaFillPolygon = useUIStore((s) => s.setAreaFillPolygon);
   const setAreaFillClosed  = useUIStore((s) => s.setAreaFillClosed);
@@ -451,7 +441,7 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
     const group: GroupNode = {
       kind: 'Group',
       id: areaFillEditGroupId ?? genId(),
-      name: editGroup?.name ?? 'Area Fill',
+      name: config.name.trim() ? `Area Fill - ${config.name.trim()}` : 'Area Fill',
       commands: [configComment, ...cmds as PatternCommand[]],
       collapsed: false,
     };
@@ -534,16 +524,26 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
     >
       {/* Header — drag handle */}
       <div
-        className="flex items-center justify-between px-3 py-2 bg-gray-800 border-b border-gray-700 cursor-move"
+        className="flex items-center gap-2 px-3 py-2 bg-gray-800 border-b border-gray-700 cursor-move"
         onMouseDown={onHeaderMouseDown}
       >
-        <span className="text-sm font-semibold select-none">
-          {areaFillEditGroupId ? 'Edit Area Fill' : 'Area Fill'}
+        <span className="text-sm font-semibold select-none shrink-0">
+          {areaFillEditGroupId ? t('af.editTitle') : t('af.title')}
         </span>
-        <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={config.name}
+          onChange={(e) => set('name', e.target.value)}
+          placeholder={t('af.fillNamePh')}
+          onMouseDown={(e) => e.stopPropagation()}
+          className="flex-1 min-w-0 bg-gray-700/60 border border-gray-600/50 rounded px-2 py-0.5 text-xs text-gray-200 focus:outline-none focus:border-blue-500 cursor-text"
+        />
+        <div className="flex items-center gap-2 shrink-0">
           {previewCount > 0 && (
             <span className="text-[10px] text-blue-300">
-              {previewCount} {config.fillType === 'dots' ? 'dot' : 'line'}{previewCount !== 1 ? 's' : ''}
+              {previewCount} {config.fillType === 'dots'
+                ? (previewCount !== 1 ? t('af.previewDots') : t('af.previewDot'))
+                : (previewCount !== 1 ? t('af.previewLines') : t('af.previewLine'))}
             </span>
           )}
           <button
@@ -567,52 +567,86 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
             : 'bg-blue-900/30 border border-blue-700/60 text-blue-300',
         ].join(' ')}>
           {areaFillClosed
-            ? `Polygon ready — ${areaFillPolygon.length} vertices`
+            ? t('af.polyReady', { n: String(areaFillPolygon.length) })
             : areaFillPolygon.length === 0
-            ? 'Click on the canvas to place polygon vertices'
-            : `${areaFillPolygon.length} vert${areaFillPolygon.length === 1 ? 'ex' : 'ices'} placed — double-click to close`}
+            ? t('af.polyStart')
+            : t('af.polyProgress', {
+                n: String(areaFillPolygon.length),
+                v: areaFillPolygon.length === 1 ? t('af.vertex') : t('af.vertices'),
+              })}
         </div>
 
         {/* Fill type */}
         <div>
-          <Label>Fill type</Label>
+          <Label>{t('af.fillType')}</Label>
           <div className="flex rounded overflow-hidden border border-gray-600">
-            {(['dots', 'lines'] as const).map((t) => (
+            {(['dots', 'lines'] as const).map((ft) => (
               <button
-                key={t}
-                onClick={() => set('fillType', t)}
+                key={ft}
+                onClick={() => set('fillType', ft)}
                 className={[
                   'flex-1 py-1 text-xs transition-colors',
-                  config.fillType === t
+                  config.fillType === ft
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600',
                 ].join(' ')}
               >
-                {t.charAt(0).toUpperCase() + t.slice(1)}
+                {ft === 'dots' ? t('af.dots') : t('af.lines')}
               </button>
             ))}
           </div>
         </div>
 
-        {/* Spacing row */}
-        <div className="grid grid-cols-3 gap-1.5">
-          <div>
-            <Label>X Spacing</Label>
-            <NumberInput value={config.xSpacing} min={0.1} max={50} step={0.5} onChange={(v) => set('xSpacing', v)} />
+        {/* Spacing row: X [lock] Y */}
+        <div className="flex items-end gap-1">
+          <div className="flex-1">
+            <Label>{t('af.xSpacing')}</Label>
+            <NumberInput
+              value={config.xSpacing}
+              min={0.1} max={50} step={0.5}
+              onChange={(v) => setConfig((prev) => lockXY ? { ...prev, xSpacing: v, ySpacing: v } : { ...prev, xSpacing: v })}
+            />
           </div>
-          <div>
-            <Label>Y Spacing</Label>
-            <NumberInput value={config.ySpacing} min={0.1} max={50} step={0.5} onChange={(v) => set('ySpacing', v)} />
+          <button
+            onClick={() => setLockXY((l) => !l)}
+            title={t('af.lockSpacing')}
+            className={[
+              'mb-0.5 p-1 rounded transition-colors',
+              lockXY ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 hover:text-gray-300',
+            ].join(' ')}
+          >
+            {lockXY ? (
+              /* Locked: both shackle arms enter the body — full closed U-arch */
+              <svg width="12" height="12" viewBox="0 0 12 13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                <rect x="2.5" y="6.5" width="7" height="6" rx="0.8" />
+                <path d="M4 7.5V4a2 2 0 0 0 4 0V7.5" />
+              </svg>
+            ) : (
+              /* Unlocked: left arm in body, right arm raised above (clasp open) */
+              <svg width="12" height="12" viewBox="0 0 12 13" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round">
+                <rect x="2.5" y="6.5" width="7" height="6" rx="0.8" />
+                <path d="M4 7.5V4a2 2 0 0 0 4 0" />
+              </svg>
+            )}
+          </button>
+          <div className="flex-1">
+            <Label>{t('af.ySpacing')}</Label>
+            <NumberInput
+              value={config.ySpacing}
+              min={0.1} max={50} step={0.5}
+              onChange={(v) => setConfig((prev) => lockXY ? { ...prev, xSpacing: v, ySpacing: v } : { ...prev, ySpacing: v })}
+            />
           </div>
-          <div>
-            <Label>Z Height</Label>
-            <NumberInput value={config.zHeight} min={-99} max={99} step={0.1} onChange={(v) => set('zHeight', v)} />
-          </div>
+        </div>
+        {/* Z Height */}
+        <div>
+          <Label>{t('af.zHeight')}</Label>
+          <NumberInput value={config.zHeight} min={-99} max={99} step={0.1} onChange={(v) => set('zHeight', v)} />
         </div>
 
         {/* Rotation */}
         <div>
-          <Label>Rotation</Label>
+          <Label>{t('af.rotation')}</Label>
           <div className="flex items-center gap-3">
             <RotationDial value={config.rotationDeg} onChange={handleDialChange} />
             <div className="flex-1">
@@ -626,20 +660,20 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
                   set('rotationDeg', deg);
                 }}
               />
-              <div className="text-[10px] text-gray-500 mt-0.5 text-center">degrees</div>
+              <div className="text-[10px] text-gray-500 mt-0.5 text-center">{t('af.degrees')}</div>
             </div>
           </div>
         </div>
 
         {/* Start corner */}
         <div>
-          <Label>Start corner</Label>
+          <Label>{t('af.startCorner')}</Label>
           <StartCornerGrid value={config.startCorner} onChange={(c) => set('startCorner', c)} />
         </div>
 
         {/* Parameter */}
         <div>
-          <Label>Parameter</Label>
+          <Label>{t('af.parameter')}</Label>
           <select
             value={config.param}
             onChange={(e) => set('param', parseInt(e.target.value, 10))}
@@ -654,7 +688,7 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
         {/* Flow rate (lines only) */}
         {config.fillType === 'lines' && (
           <div>
-            <Label>Flow rate (mg/mm)</Label>
+            <Label>{t('af.flowRate')}</Label>
             <NumberInput value={config.flowRate} min={0.01} max={10} step={0.05} onChange={(v) => set('flowRate', v)} />
           </div>
         )}
@@ -666,18 +700,18 @@ export default function AreaFillPanel({ anchorRect, onCancel }: AreaFillPanelPro
             disabled={!canGenerate || previewCount === 0}
             className="flex-1 py-1.5 rounded text-xs font-semibold bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-default text-white transition-colors"
           >
-            Apply
+            {t('af.apply')}
           </button>
           <button
             onClick={handleCancel}
             className="flex-1 py-1.5 rounded text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
           >
-            Cancel
+            {t('af.cancel')}
           </button>
         </div>
 
         {!selectedPatternName && (
-          <div className="text-[10px] text-yellow-400">Select a pattern first to enable apply.</div>
+          <div className="text-[10px] text-yellow-400">{t('af.selectFirst')}</div>
         )}
 
       </div>

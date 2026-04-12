@@ -28,6 +28,10 @@ function findAreaFillGroup(
   return null;
 }
 
+function hasAnyGroup(commands: PatternCommand[]): boolean {
+  return commands.some((c) => c.kind === 'Group');
+}
+
 function findSingleGroup(
   commands: PatternCommand[],
   ids: Set<string>,
@@ -95,12 +99,38 @@ function EditIcon() {
   );
 }
 
+function ExpandAllIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      {/* top folder open */}
+      <path d="M1 3.5Q1 3 1.5 3L4 3L5 4.5L8.5 4.5Q9 4.5 9 5L9 7" />
+      {/* bottom folder open */}
+      <path d="M5 7.5Q5 7 5.5 7L8 7L9 8.5L12.5 8.5Q13 8.5 13 9L13 12Q13 12.5 12.5 12.5L5.5 12.5Q5 12.5 5 12Z" />
+      {/* expand arrow */}
+      <polyline points="11,5 13,7 11,9" />
+    </svg>
+  );
+}
+
+function CollapseAllIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+      {/* folder body */}
+      <path d="M1 4Q1 3.5 1.5 3.5L4.5 3.5L5.5 5L12.5 5Q13 5 13 5.5L13 11Q13 11.5 12.5 11.5L1.5 11.5Q1 11.5 1 11Z" />
+      {/* collapse chevrons pointing inward */}
+      <polyline points="5,8 7,7 9,8" />
+    </svg>
+  );
+}
+
 const ICON_MAP: Record<NonNullable<ContextMenuItem['icon']>, React.FC> = {
-  copy:   CopyIcon,
-  cut:    CutIcon,
-  paste:  PasteIcon,
-  delete: DeleteIcon,
-  edit:   EditIcon,
+  copy:         CopyIcon,
+  cut:          CutIcon,
+  paste:        PasteIcon,
+  delete:       DeleteIcon,
+  edit:         EditIcon,
+  'expand-all':   ExpandAllIcon,
+  'collapse-all': CollapseAllIcon,
 };
 
 // ── Menu row ──────────────────────────────────────────────────────────────────
@@ -276,14 +306,16 @@ export function useCommandContextMenu() {
 
       if (singleGroup) {
         items.push({ separator: true });
-        items.push({
-          label: 'Rename Group',
-          icon: 'edit',
-          action: () => {
-            useUIStore.getState().setRenamingGroupId(singleGroup.id!);
-            hideContextMenu();
-          },
-        });
+        if (!areaFillGroup) {
+          items.push({
+            label: 'Rename Group',
+            icon: 'edit',
+            action: () => {
+              useUIStore.getState().setRenamingGroupId(singleGroup.id!);
+              hideContextMenu();
+            },
+          });
+        }
         if (areaFillGroup) {
           items.push({
             label: 'Edit Area Fill',
@@ -305,6 +337,21 @@ export function useCommandContextMenu() {
             setActiveTool('area-fill');
             hideContextMenu();
           },
+        });
+      }
+
+      // Expand / Collapse all groups — shown whenever any group exists in the pattern
+      if (hasAnyGroup(commands)) {
+        items.push({ separator: true });
+        items.push({
+          label: 'Expand All Groups',
+          icon: 'expand-all',
+          action: () => { useUIStore.getState().triggerExpandAll(); hideContextMenu(); },
+        });
+        items.push({
+          label: 'Collapse All Groups',
+          icon: 'collapse-all',
+          action: () => { useUIStore.getState().triggerCollapseAll(); hideContextMenu(); },
         });
       }
 

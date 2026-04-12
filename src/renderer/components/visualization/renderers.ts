@@ -68,8 +68,9 @@ export function drawLine(
   suppressStartDot = false,
   lineWidthPx?: number,
   suppressStartSquare = false,
+  overrideColor?: string,
 ) {
-  const color = valveColor(cmd.valve);
+  const color = overrideColor ?? valveColor(cmd.valve);
   const [x1, y1] = worldToScreen(cmd.startPoint[0], cmd.startPoint[1], cam);
   const [x2, y2] = worldToScreen(cmd.endPoint[0], cmd.endPoint[1], cam);
 
@@ -141,8 +142,9 @@ export function drawDot(
   cam: Camera,
   selected: boolean,
   dotRadiusPx?: number,
+  overrideColor?: string,
 ) {
-  const color = valveColor(cmd.valve);
+  const color = overrideColor ?? valveColor(cmd.valve);
   const [sx, sy] = worldToScreen(cmd.point[0], cmd.point[1], cam);
   const r = dotRadiusPx ?? cam.zoom * 1.0;
 
@@ -307,12 +309,13 @@ export function drawCommand(
   renderConfig?: RenderConfig,
   selectedJunctionStarts: Set<string> = new Set(),
   searchMatchIds?: Set<string>,
+  overrideColor?: string,
 ) {
   // Groups are transparent containers — recurse without applying search dimming
   // at the group level so each child handles its own visibility independently.
   if (cmd.kind === 'Group') {
     for (const child of cmd.commands) {
-      drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts, searchMatchIds);
+      drawCommand(ctx, child, cam, selectedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts, searchMatchIds, overrideColor);
     }
     return;
   }
@@ -329,14 +332,14 @@ export function drawCommand(
       if (!hiddenValves.has(cmd.valve)) {
         const sk = `${cmd.startPoint[0].toFixed(3)},${cmd.startPoint[1].toFixed(3)},${cmd.startPoint[2].toFixed(3)}`;
         const thickMm = renderConfig?.lineThicknesses[cmd.valve - 1] ?? 0.5;
-        drawLine(ctx, cmd, cam, isSelected, connectedStarts.has(sk), thickMm * cam.zoom, selectedJunctionStarts.has(sk));
+        drawLine(ctx, cmd, cam, isSelected, connectedStarts.has(sk), thickMm * cam.zoom, selectedJunctionStarts.has(sk), overrideColor);
       }
       break;
     }
     case 'Dot': {
       if (!hiddenValves.has(cmd.valve)) {
         const diamMm = renderConfig?.dotSizes[cmd.valve - 1] ?? 1.0;
-        drawDot(ctx, cmd, cam, isSelected, (diamMm / 2) * cam.zoom);
+        drawDot(ctx, cmd, cam, isSelected, (diamMm / 2) * cam.zoom, overrideColor);
       }
       break;
     }

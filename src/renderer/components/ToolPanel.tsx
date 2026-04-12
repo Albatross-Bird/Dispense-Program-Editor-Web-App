@@ -7,6 +7,7 @@ import { useProgramStore, genId } from '../store/program-store';
 import { useUIStore } from '../store/ui-store';
 import AreaFillPanel, { useAnchorRect } from './AreaFillPanel';
 import { valveColor } from './visualization/renderers';
+import { useT } from '../hooks/useT';
 
 // ── SVG Icons ──────────────────────────────────────────────────────────────────
 
@@ -220,6 +221,7 @@ interface CommentToolPromptProps {
 }
 
 function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPromptProps) {
+  const t = useT();
   const inputRef = useRef<HTMLInputElement>(null);
   const [toast, setToast] = useState<string | null>(null);
 
@@ -230,7 +232,7 @@ function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPr
     if (!txt) return;
     const reserved = RESERVED_PREFIXES.find((p) => txt.startsWith(p));
     if (reserved) {
-      setToast('This comment syntax is reserved for internal use. Please use different text.');
+      setToast(t('comment.reserved'));
       setTimeout(() => setToast(null), 3500);
       return;
     }
@@ -254,7 +256,7 @@ function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPr
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={handleKey}
-          placeholder="Enter comment text…"
+          placeholder={t('comment.placeholder')}
           className="flex-1 bg-transparent px-2 py-1 text-xs text-gray-100 focus:outline-none placeholder-gray-500"
         />
         <button
@@ -278,12 +280,13 @@ function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPr
 // ── Chain Mode Checkbox ────────────────────────────────────────────────────────
 
 function ChainModeCheckbox({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  const t = useT();
   return (
     <div className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50">
       <label
         className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap cursor-pointer select-none"
         style={{ background: 'rgba(15,20,30,0.92)', border: '1px solid #ffffff22', color: checked ? '#93c5fd' : '#9ca3af' }}
-        title="Chain mode: connect lines end-to-start"
+        title={t('chain.tooltip')}
       >
         <input
           type="checkbox"
@@ -291,7 +294,7 @@ function ChainModeCheckbox({ checked, onChange }: { checked: boolean; onChange: 
           onChange={(e) => onChange(e.target.checked)}
           className="w-2.5 h-2.5 accent-blue-500"
         />
-        Chain
+        {t('chain.label')}
       </label>
     </div>
   );
@@ -349,6 +352,7 @@ interface GroupPromptProps {
 }
 
 function GroupPrompt({ onConfirm, onCancel }: GroupPromptProps) {
+  const t = useT();
   const [name, setName] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -364,14 +368,14 @@ function GroupPrompt({ onConfirm, onCancel }: GroupPromptProps) {
 
   return (
     <div className="absolute left-full top-0 ml-1 z-50 bg-gray-800 border border-gray-600 rounded shadow-xl p-2 w-44">
-      <div className="text-[10px] text-gray-400 mb-1">Group name</div>
+      <div className="text-[10px] text-gray-400 mb-1">{t('group.nameLabel')}</div>
       <input
         ref={inputRef}
         value={name}
         onChange={(e) => setName(e.target.value)}
         onKeyDown={handleKey}
         className="w-full bg-gray-700 border border-gray-600 rounded px-1.5 py-0.5 text-xs text-gray-100 focus:outline-none focus:border-blue-500"
-        placeholder="My Group"
+        placeholder={t('group.namePh')}
       />
       <div className="flex gap-1 mt-1.5">
         <button
@@ -379,13 +383,13 @@ function GroupPrompt({ onConfirm, onCancel }: GroupPromptProps) {
           disabled={!name.trim()}
           className="flex-1 text-[10px] bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-default text-white rounded px-1 py-0.5"
         >
-          Create
+          {t('dialog.create')}
         </button>
         <button
           onClick={onCancel}
           className="flex-1 text-[10px] bg-gray-700 hover:bg-gray-600 text-gray-300 rounded px-1 py-0.5"
         >
-          Cancel
+          {t('dialog.cancel')}
         </button>
       </div>
     </div>
@@ -395,6 +399,7 @@ function GroupPrompt({ onConfirm, onCancel }: GroupPromptProps) {
 // ── Main Component ─────────────────────────────────────────────────────────────
 
 export default function ToolPanel() {
+  const t                   = useT();
   const program             = useProgramStore((s) => s.program);
   const selectedPatternName = useProgramStore((s) => s.selectedPatternName);
   const selectedCommandIds  = useProgramStore((s) => s.selectedCommandIds);
@@ -527,7 +532,7 @@ export default function ToolPanel() {
       <div className="relative">
         <ToolButton
           icon={<NewLineIcon />}
-          label="New Line (click 2 points; Esc to stop)"
+          label={t('tool.newLine')}
           active={activeTool === 'new-line'}
           disabled={!canEdit}
           onClick={() => toggleTool('new-line')}
@@ -542,7 +547,7 @@ export default function ToolPanel() {
       <div className="relative">
         <ToolButton
           icon={<NewDotIcon />}
-          label="New Dot (click to place; Esc to stop)"
+          label={t('tool.newDot')}
           active={activeTool === 'new-dot'}
           disabled={!canEdit}
           onClick={() => toggleTool('new-dot')}
@@ -554,7 +559,7 @@ export default function ToolPanel() {
       <div className="relative">
         <ToolButton
           icon={<NewCommentIcon />}
-          label="New Comment"
+          label={t('tool.newComment')}
           active={activeTool === 'new-comment'}
           disabled={!canEdit}
           onClick={() => toggleTool('new-comment')}
@@ -573,32 +578,32 @@ export default function ToolPanel() {
 
       <ToolButton
         icon={<MergeEndStartIcon />}
-        label="Merge: move 1st end → 2nd start"
+        label={t('tool.mergeES')}
         disabled={!canMerge}
         onClick={mergeEndToStart}
       />
       <ToolButton
         icon={<MergeStartEndIcon />}
-        label="Merge: move 2nd start → 1st end"
+        label={t('tool.mergeSE')}
         disabled={!canMerge}
         onClick={mergeStartToEnd}
       />
       <ToolButton
         icon={<DisconnectIcon />}
-        label="Disconnect joined lines"
+        label={t('tool.disconnect')}
         disabled={!canDisconnect}
         onClick={disconnectLines}
       />
       <ToolButton
         icon={<SplitLineIcon />}
-        label="Split line — click along a line"
+        label={t('tool.splitLine')}
         active={activeTool === 'split-line'}
         disabled={!canSplitJoin}
         onClick={() => toggleTool('split-line')}
       />
       <ToolButton
         icon={<JoinLinesIcon />}
-        label="Join lines — click a junction"
+        label={t('tool.joinLines')}
         active={activeTool === 'join-lines'}
         disabled={!canSplitJoin}
         onClick={() => toggleTool('join-lines')}
@@ -608,7 +613,7 @@ export default function ToolPanel() {
 
       <ToolButton
         icon={<AreaFillIcon />}
-        label="Area Fill — draw polygon"
+        label={t('tool.areaFill')}
         active={activeTool === 'area-fill'}
         disabled={!canEdit}
         onClick={() => toggleTool('area-fill')}
@@ -620,7 +625,7 @@ export default function ToolPanel() {
       <div className="relative">
         <ToolButton
           icon={<GroupIcon />}
-          label="Group selection"
+          label={t('tool.group')}
           disabled={!canGroup}
           onClick={() => setGroupPromptOpen((v) => !v)}
         />
@@ -634,7 +639,7 @@ export default function ToolPanel() {
 
       <ToolButton
         icon={<UngroupIcon />}
-        label="Ungroup"
+        label={t('tool.ungroup')}
         disabled={!canUngroup}
         onClick={ungroupSelection}
       />
@@ -646,8 +651,8 @@ export default function ToolPanel() {
         icon={<TrashIcon />}
         label={
           selectedCommandIds.size > 0
-            ? `Delete ${selectedCommandIds.size} selected`
-            : 'Delete tool — click commands to delete'
+            ? t('tool.deleteSelected', { count: String(selectedCommandIds.size) })
+            : t('tool.deleteTool')
         }
         active={activeTool === 'delete-item'}
         disabled={!canEdit}

@@ -13,6 +13,7 @@ import type { RenderConfig } from './renderers';
 import { useSettingsStore, DEFAULT_BG_IMAGE_SETTINGS } from '../../store/settings-store';
 import type { BgImageSettings } from '../../store/settings-store';
 import BgImageSettingsPanel from './BgImageSettingsPanel';
+import NumberInput from '../NumberInput';
 import {
   computeHandles, drawHandles, hitTestHandle,
   deepCloneCommands, clearRawForModified, findCmdById,
@@ -608,28 +609,17 @@ function DotSizeIcon({ color }: { color: string }) {
 }
 
 function ThicknessInput({
-  value, onChange, min, max, step,
+  value, onChange, min, max,
 }: { value: number; onChange: (v: number) => void; min: number; max: number; step: number }) {
-  const [localVal, setLocalVal] = React.useState(String(value));
-  // Sync if external value changes
-  React.useEffect(() => { setLocalVal(String(value)); }, [value]);
-
-  const commit = () => {
-    const n = parseFloat(localVal);
-    if (!isNaN(n)) onChange(Math.max(min, Math.min(max, n)));
-    else setLocalVal(String(value));
-  };
-
   return (
-    <input
-      type="number"
-      value={localVal}
-      min={min} max={max} step={step}
-      onChange={(e) => setLocalVal(e.target.value)}
-      onBlur={commit}
-      onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } e.stopPropagation(); }}
+    <NumberInput
+      value={value}
+      min={min}
+      max={max}
+      onChange={onChange}
+      onKeyDown={(e) => e.stopPropagation()}
       onClick={(e) => e.stopPropagation()}
-      className="w-[46px] bg-gray-800 border border-gray-600/80 rounded px-1 py-0 text-[10px] text-gray-200 text-right focus:outline-none focus:border-blue-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+      className="w-[46px] bg-gray-800 border border-gray-600/80 rounded px-1 py-0 text-[10px] text-gray-200 text-right focus:outline-none focus:border-blue-500"
     />
   );
 }
@@ -849,11 +839,14 @@ export default function Canvas() {
   const filePath             = useProgramStore((s) => s.filePath);
 
   const setZoomLevel       = useUIStore((s) => s.setZoomLevel);
+  const fitToViewTrigger   = useUIStore((s) => s.fitToViewTrigger);
   const setCursorCoords    = useUIStore((s) => s.setCursorCoords);
   const backgroundImages   = useUIStore((s) => s.backgroundImages);
   const setBackgroundImage = useUIStore((s) => s.setBackgroundImage);
   const activeTool         = useUIStore((s) => s.activeTool);
   const setActiveTool      = useUIStore((s) => s.setActiveTool);
+  const pendingBgImages    = useUIStore((s) => s.pendingBgImages);
+  const setPendingBgImage  = useUIStore((s) => s.setPendingBgImage);
 
   // Per-pattern image: key = `${filePath}::${patternName}` so each subpattern is independent
   const patternKey = filePath !== null && selectedPatternName !== null
@@ -864,11 +857,42 @@ export default function Canvas() {
     [backgroundImages, patternKey],
   );
 
+  /** Deferred bg image pending for this pattern (stored in metadata comment, not yet loaded). */
+  const pendingBgData = useMemo(
+    () => (patternKey ? (pendingBgImages[patternKey] ?? null) : null),
+    [pendingBgImages, patternKey],
+  );
+
+  const [deferredLoadError, setDeferredLoadError] = useState<string | null>(null);
+  const [deferredLoading, setDeferredLoading] = useState(false);
+
+  const handleLoadDeferredBgImage = useCallback(async () => {
+    if (!pendingBgData || !patternKey) return;
+    setDeferredLoading(true);
+    setDeferredLoadError(null);
+    try {
+      const result = await (window as unknown as { electronAPI: { readImage: (p: string) => Promise<{ data: string; mime: string } | null> } }).electronAPI.readImage(pendingBgData.filePath);
+      if (!result) {
+        setDeferredLoadError('Image file not found. It may have been moved or deleted.');
+        return;
+      }
+      const dataUrl = `data:${result.mime};base64,${result.data}`;
+      setBackgroundImage(patternKey, { filePath: pendingBgData.filePath, dataUrl });
+      // Remove the pending entry since the image is now in backgroundImages
+      setPendingBgImage(patternKey, null);
+    } catch {
+      setDeferredLoadError('Failed to load image.');
+    } finally {
+      setDeferredLoading(false);
+    }
+  }, [pendingBgData, patternKey, setBackgroundImage, setPendingBgImage]);
+
   const insertAfterSelection  = useProgramStore((s) => s.insertAfterSelection);
   const insertAboveSelection  = useProgramStore((s) => s.insertAboveSelection);
   const splitLine             = useProgramStore((s) => s.splitLine);
   const joinLines            = useProgramStore((s) => s.joinLines);
   const deleteCommand        = useProgramStore((s) => s.deleteCommand);
+  const setBgImageComment    = useProgramStore((s) => s.setBgImageComment);
 
   const { showMenu: showContextMenuForSelection, showPasteOnlyMenu } = useCommandContextMenu();
 
@@ -1136,7 +1160,8 @@ export default function Canvas() {
         const canvas = canvasRef.current;
         if (canvas && canvas.width > 0) {
           cameraRef.current = fitCamera([[0, 0], [img.width, img.height]], canvas.width, canvas.height);
-          setZoomLevel(cameraRef.current.zoom);
+          fitZoomRef.current = cameraRef.current.zoom;
+          setZoomLevel(1.0);
         }
       }
     };
@@ -1160,7 +1185,11 @@ export default function Canvas() {
     setActiveCalibIdx(null);
     setCalibScales([]);
     setScalingCalibIdx(null);
-  }, [calibPixels, fiducials, patternKey, setCalibrationData]);
+    // Persist bg image path + calibration points as a metadata comment in the pattern
+    if (selectedPatternName && backgroundImage) {
+      setBgImageComment(selectedPatternName, backgroundImage.filePath, pairs);
+    }
+  }, [calibPixels, fiducials, patternKey, setCalibrationData, selectedPatternName, backgroundImage, setBgImageComment]);
 
   const handleCalibCancel = useCallback(() => {
     setIsCalibrating(false);
@@ -1171,7 +1200,9 @@ export default function Canvas() {
     // Remove the image entirely so the pattern returns to a clean state
     if (patternKey) setBackgroundImage(patternKey, null);
     setImgEl(null);
-  }, [patternKey, setBackgroundImage]);
+    // Remove the metadata comment from the pattern (if any)
+    if (selectedPatternName) setBgImageComment(selectedPatternName, null, []);
+  }, [patternKey, setBackgroundImage, selectedPatternName, setBgImageComment]);
 
   const handleRecalibrate = useCallback(() => {
     const key = patternKey;
@@ -1187,7 +1218,8 @@ export default function Canvas() {
       const canvas = canvasRef.current;
       if (canvas && canvas.width > 0) {
         cameraRef.current = fitCamera([[0, 0], [imgEl.width, imgEl.height]], canvas.width, canvas.height);
-        setZoomLevel(cameraRef.current.zoom);
+        fitZoomRef.current = cameraRef.current.zoom;
+        setZoomLevel(1.0);
       }
     }
   }, [patternKey, clearCalibrationData, imgEl, setZoomLevel]);
@@ -1243,7 +1275,7 @@ export default function Canvas() {
 
       // Draw area fill polygon overlay (always on top)
       if (activeToolRef.current === 'area-fill') {
-        // Live preview commands (semi-transparent)
+        // Live preview commands (semi-transparent, first cmd highlighted in white)
         const previewCmds = areaFillPreviewCmdsRef.current;
         if (previewCmds.length > 0) {
           ctx.save();
@@ -1253,6 +1285,11 @@ export default function Canvas() {
           for (const cmd of previewCmds) {
             drawCommand(ctx, cmd, cameraRef.current, noSelection, new Set(), previewConnected, { lineThicknesses, dotSizes });
           }
+          ctx.restore();
+          // Redraw the first command at full opacity in white to mark the start corner (23C)
+          ctx.save();
+          ctx.globalAlpha = 1.0;
+          drawCommand(ctx, previewCmds[0], cameraRef.current, new Set<string>(), new Set(), previewConnected, { lineThicknesses, dotSizes }, new Set(), undefined, '#ffffff');
           ctx.restore();
         }
 
@@ -1369,7 +1406,10 @@ export default function Canvas() {
   }, [searchFocusedIdx, searchMatchList, selectedPatternName, commands]);
 
   // Fit to view only when the selected pattern or file changes — not on every edit
-  const fittedRef = useRef(false);
+  const fittedRef   = useRef(false);
+  /** Raw camera zoom (px per world unit) at the last fit-to-view. Used to express
+   *  the current zoom as a multiplier: zoomLevel = camera.zoom / fitZoomRef.current */
+  const fitZoomRef  = useRef(1);
   useEffect(() => { fittedRef.current = false; }, [selectedPatternName, filePath]);
 
   // Cancel any in-progress calibration when switching patterns
@@ -1389,7 +1429,8 @@ export default function Canvas() {
     const pts = collectPoints(commands);
     if (pts.length > 0) {
       cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
-      setZoomLevel(cameraRef.current.zoom);
+      fitZoomRef.current = cameraRef.current.zoom;
+      setZoomLevel(1.0);
       fittedRef.current = true;
     }
     requestAnimationFrame(drawRef.current);
@@ -1418,7 +1459,8 @@ export default function Canvas() {
           : collectPoints(commandsRef.current);
         if (pts.length > 0) {
           cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
-          setZoomLevel(cameraRef.current.zoom);
+          fitZoomRef.current = cameraRef.current.zoom;
+          setZoomLevel(1.0);
           fittedRef.current = true;
         }
       } else if (prevW > 0 && prevH > 0) {
@@ -1446,6 +1488,21 @@ export default function Canvas() {
     };
   }, []);
 
+  // Fit-to-view triggered by clicking the zoom indicator in the status bar (23A/23F)
+  useEffect(() => {
+    if (fitToViewTrigger === 0) return; // skip initial mount
+    const canvas = canvasRef.current;
+    if (!canvas || canvas.width === 0) return;
+    const pts = collectPoints(commandsRef.current);
+    if (pts.length > 0) {
+      cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
+      fitZoomRef.current = cameraRef.current.zoom;
+      setZoomLevel(1.0);
+      requestAnimationFrame(drawRef.current);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitToViewTrigger, setZoomLevel]);
+
   // ── Interaction ───────────────────────────────────────────────────────────
 
   const isPanning    = useRef(false);
@@ -1465,6 +1522,8 @@ export default function Canvas() {
         return;
       }
       if (e.code === 'Space' && !e.repeat) {
+        const tag = (e.target as HTMLElement)?.tagName;
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || (e.target as HTMLElement)?.isContentEditable) return;
         e.preventDefault();
         spaceHeld.current = true;
         if (canvasRef.current) canvasRef.current.style.cursor = 'grab';
@@ -1494,7 +1553,7 @@ export default function Canvas() {
       const rect = canvas.getBoundingClientRect();
       const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       cameraRef.current = zoomAt(cameraRef.current, e.clientX - rect.left, e.clientY - rect.top, factor);
-      setZoomLevel(cameraRef.current.zoom);
+      setZoomLevel(fitZoomRef.current > 0 ? cameraRef.current.zoom / fitZoomRef.current : 1);
       requestAnimationFrame(drawRef.current);
     };
     canvas.addEventListener('wheel', handler, { passive: false });
@@ -2390,6 +2449,33 @@ export default function Canvas() {
           {placementPhase === 'line-end'   && 'Click to place end point'}
           {placementPhase === 'dot'        && 'Click to place dot'}
           <span className="text-blue-300 ml-2">— Esc to cancel</span>
+        </div>
+      )}
+
+      {/* Deferred background image banner */}
+      {pendingBgData && !backgroundImage && !isCalibrating && (
+        <div className="absolute bottom-8 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 z-20">
+          <div className="flex items-center gap-2 bg-gray-900/95 border border-amber-600/70 text-amber-200 text-xs px-3 py-1.5 rounded-md shadow-xl">
+            <svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-amber-400">
+              <rect x="2" y="4" width="10" height="8" rx="1.2" />
+              <path d="M5 4V2.5a2 2 0 0 1 4 0V4" />
+            </svg>
+            <span className="max-w-[260px] truncate" title={pendingBgData.filePath}>
+              Background image available
+            </span>
+            <button
+              onClick={handleLoadDeferredBgImage}
+              disabled={deferredLoading}
+              className="ml-1 bg-amber-700/80 hover:bg-amber-600 disabled:opacity-50 text-amber-100 text-[11px] px-2 py-0.5 rounded transition-colors"
+            >
+              {deferredLoading ? 'Loading…' : 'Enable'}
+            </button>
+          </div>
+          {deferredLoadError && (
+            <div className="bg-red-900/90 border border-red-600/60 text-red-200 text-[11px] px-2.5 py-1 rounded">
+              {deferredLoadError}
+            </div>
+          )}
         </div>
       )}
 

@@ -2,9 +2,18 @@ import { create } from 'zustand';
 import type { Program, Pattern, PatternCommand, LineCommand, DotCommand, CommentCommand, GroupNode } from '@lib/types';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
-import { MYD_DEFAULT } from '@lib/syntax-profiles';
+import { MYD_DEFAULT, getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
 import { applyReplace } from '@lib/search';
 import type { SearchMatch } from '@lib/search';
+import { useSettingsStore } from './settings-store';
+import { useUIStore } from './ui-store';
+import { computeAffine } from '@lib/affine';
+import { useCalibrationStore } from './calibration-store';
+
+function activeProfile(): SyntaxProfile {
+  const { softwareType, version } = useSettingsStore.getState();
+  return getProfile(softwareType, version);
+}
 
 const MAX_HISTORY = 200;
 
@@ -15,6 +24,8 @@ export interface HistoryEntry {
   label: string;
   timestamp: number;
   snapshot: Program;
+  /** True for the synthetic "Saved to disk" marker inserted after a successful save. */
+  isSaveMarker?: boolean;
 }
 
 // ── Local helpers ─────────────────────────────────────────────────────────────
@@ -144,6 +155,9 @@ interface ProgramStore {
   historyCurrentIndex: number;
 
   load: () => Promise<void>;
+  /** Re-read the current file from disk and re-parse with the given profile.
+   *  Returns true on success, false if the file could not be parsed. */
+  reloadWithProfile: (profile: SyntaxProfile) => Promise<boolean>;
   save: () => Promise<void>;
   saveAs: () => Promise<void>;
   clearSaveError: () => void;
@@ -211,6 +225,19 @@ interface ProgramStore {
     label: string,
   ) => number;
 
+  // ── Background image metadata ─────────────────────────────────────────────
+  /**
+   * Insert, update, or remove the `##BG_IMAGE:` metadata comment in the named
+   * pattern's command list. Does NOT push a history entry — this is side-channel
+   * metadata that the user never touches directly.
+   * Pass `imgFilePath = null` to remove any existing comment.
+   */
+  setBgImageComment: (
+    patternName: string,
+    imgFilePath: string | null,
+    points: import('@lib/affine').CalibPoint[],
+  ) => void;
+
   // ── Plain-text editing ────────────────────────────────────────────────────
   /**
    * Apply a successful parse result from the plain-text editor for a named
@@ -240,6 +267,8 @@ declare global {
       saveFile: (filePath: string, content: string) => Promise<string | null>;
       saveFileAs: (content: string, defaultPath?: string) => Promise<string | null>;
       loadImage: () => Promise<{ filePath: string; data: string; mime: string } | null>;
+      readFile: (filePath: string) => Promise<string | null>;
+      readImage: (filePath: string) => Promise<{ data: string; mime: string } | null>;
       storeGet: (key: string) => Promise<unknown>;
       storeSet: (key: string, value: unknown) => Promise<void>;
     };
@@ -279,7 +308,8 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
   load: async () => {
     const result = await window.electronAPI.openFile();
     if (!result) return;
-    const program = parse(result.content, MYD_DEFAULT);
+    const profile = activeProfile();
+    const program = parse(result.content, profile);
     const entry = makeEntry('File opened', structuredClone(program));
     set({
       program,
@@ -291,19 +321,92 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
       historyEntries: [entry],
       historyCurrentIndex: 0,
     });
+
+    // Scan all patterns for ##BG_IMAGE: metadata comments and populate
+    // pendingBgImages (deferred — image file is NOT read from disk yet).
+    const BG_PREFIX = '##BG_IMAGE:';
+    for (const pattern of program.patterns) {
+      const comment = pattern.commands.find(
+        (c) => c.kind === 'Comment' && c.text.startsWith(BG_PREFIX),
+      );
+      if (!comment || comment.kind !== 'Comment') continue;
+      try {
+        const body = comment.text.slice(BG_PREFIX.length);
+        const fields: Record<string, string> = {};
+        body.split('|').forEach((f) => {
+          const eq = f.indexOf('=');
+          if (eq !== -1) fields[f.slice(0, eq)] = f.slice(eq + 1);
+        });
+        if (!fields.path || !fields.points) continue;
+        const points = fields.points.split(';').map((seg) => {
+          const [px, py, wx, wy] = seg.split(',').map(Number);
+          return { imagePixel: [px, py] as [number, number], programCoord: [wx, wy] as [number, number] };
+        }).filter((p) => p.imagePixel.every(isFinite) && p.programCoord.every(isFinite));
+        if (points.length < 2) continue;
+        const key = `${result.filePath}::${pattern.name}`;
+        useUIStore.getState().setPendingBgImage(key, { filePath: fields.path, points });
+        // Pre-load calibration data so the transform is available if the user enables the image
+        const transform = computeAffine(points);
+        useCalibrationStore.getState().setCalibration(key, { points, transform });
+      } catch {
+        // Malformed comment — ignore
+      }
+    }
+  },
+
+  reloadWithProfile: async (profile: SyntaxProfile) => {
+    const { filePath } = get();
+    if (!filePath) return true; // no file open — nothing to re-parse
+    try {
+      const content = await window.electronAPI.readFile(filePath);
+      if (content === null) return false;
+      const program = parse(content, profile);
+      const entry = makeEntry('File opened', structuredClone(program));
+      set({
+        program,
+        isDirty: false,
+        selectedPatternName: null,
+        selectedCommandIds: new Set<string>(),
+        lastSelectedId: null,
+        historyEntries: [entry],
+        historyCurrentIndex: 0,
+      });
+      return true;
+    } catch {
+      return false;
+    }
   },
 
   save: async () => {
     const { program, filePath } = get();
     if (!program) return;
     if (!filePath) return get().saveAs();
-    const content = serialize(program, MYD_DEFAULT);
+    const content = serialize(program, activeProfile());
     try {
       const result = await window.electronAPI.saveFile(filePath, content);
       if (result === null) {
         set({ saveError: 'Could not save the file — it may be read-only. Use File → Save As to save a copy.' });
       } else {
         set({ isDirty: false, saveError: null });
+        // Insert a "Saved to disk" marker into history at the current position
+        // without discarding the future branch (undone entries remain navigable).
+        const { historyEntries, historyCurrentIndex } = get();
+        const currentEntry = historyEntries[historyCurrentIndex];
+        if (currentEntry) {
+          const marker: HistoryEntry = {
+            id: genId(),
+            label: 'Saved to disk',
+            timestamp: Date.now(),
+            snapshot: currentEntry.snapshot,
+            isSaveMarker: true,
+          };
+          const next = [
+            ...historyEntries.slice(0, historyCurrentIndex + 1),
+            marker,
+            ...historyEntries.slice(historyCurrentIndex + 1),
+          ];
+          set({ historyEntries: next, historyCurrentIndex: historyCurrentIndex + 1 });
+        }
       }
     } catch {
       set({ saveError: 'Save failed. Use File → Save As to save a copy.' });
@@ -313,7 +416,7 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
   saveAs: async () => {
     const { program, filePath } = get();
     if (!program) return;
-    const content = serialize(program, MYD_DEFAULT);
+    const content = serialize(program, activeProfile());
     const savedPath = await window.electronAPI.saveFileAs(content, filePath ?? undefined);
     if (savedPath) set({ filePath: savedPath, isDirty: false });
   },
@@ -1050,6 +1153,68 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     } else {
       const h = pushEntry(historyEntries, historyCurrentIndex, 'Edit pattern text', newProgram);
       set({ program: newProgram, isDirty: true, historyEntries: h.entries, historyCurrentIndex: h.currentIndex });
+    }
+  },
+
+  setBgImageComment: (patternName, imgFilePath, points) => {
+    const { program, filePath } = get();
+    if (!program) return;
+    const pattern = program.patterns.find((p) => p.name === patternName);
+    if (!pattern) return;
+
+    const BG_PREFIX = '##BG_IMAGE:';
+
+    // Remove any existing bg-image comment from top-level commands
+    const withoutComment = pattern.commands.filter(
+      (c) => !(c.kind === 'Comment' && c.text.startsWith(BG_PREFIX)),
+    );
+
+    let newCmds: PatternCommand[];
+    if (imgFilePath === null || points.length < 2) {
+      // Removal only
+      newCmds = withoutComment;
+    } else {
+      // Serialize: ##BG_IMAGE:path=<path>|points=px1,py1,wx1,wy1;px2,...
+      const pointsStr = points
+        .map((p) => `${p.imagePixel[0]},${p.imagePixel[1]},${p.programCoord[0]},${p.programCoord[1]}`)
+        .join(';');
+      const commentText = `${BG_PREFIX}path=${imgFilePath}|points=${pointsStr}`;
+      const commentCmd: import('@lib/types').CommentCommand = {
+        kind: 'Comment',
+        id: genId(),
+        text: commentText,
+      };
+      // Insert at the start of commands
+      newCmds = [commentCmd, ...withoutComment];
+    }
+
+    const newProgram = {
+      ...program,
+      patterns: program.patterns.map((p) =>
+        p.name === patternName ? { ...p, commands: newCmds } : p,
+      ),
+    };
+
+    // Update history snapshot in-place (no new entry, no isDirty flip for metadata)
+    // Also update the program silently so the comment persists in subsequent saves.
+    const { historyEntries, historyCurrentIndex } = get();
+    const currentEntry = historyEntries[historyCurrentIndex];
+    if (currentEntry) {
+      const newEntries = [...historyEntries];
+      newEntries[historyCurrentIndex] = { ...currentEntry, snapshot: structuredClone(newProgram) };
+      set({ program: newProgram, historyEntries: newEntries });
+    } else {
+      set({ program: newProgram });
+    }
+
+    // Keep pendingBgImages in ui-store in sync
+    if (filePath) {
+      const key = `${filePath}::${patternName}`;
+      if (imgFilePath === null || points.length < 2) {
+        useUIStore.getState().setPendingBgImage(key, null);
+      } else {
+        useUIStore.getState().setPendingBgImage(key, { filePath: imgFilePath, points });
+      }
     }
   },
 

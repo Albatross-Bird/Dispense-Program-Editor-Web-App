@@ -8,11 +8,14 @@ import type { Pattern, Program } from '@lib/types';
 import { parsePatternBlock, parseMainBlockText } from '@lib/parser';
 import { searchProgram } from '@lib/search';
 import type { SearchScope } from '@lib/search';
+import { PROFILES, profileLabel, getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
 import Canvas from './components/visualization/Canvas';
 import PatternCommandList from './components/PatternCommandList';
 import ToolPanel from './components/ToolPanel';
 import HistoryPanel from './components/HistoryPanel';
 import ContextMenu, { useCommandContextMenu } from './components/ContextMenu';
+import SettingsPanel from './components/SettingsPanel';
+import { useT } from './hooks/useT';
 
 // ── Text annotation ───────────────────────────────────────────────────────────
 
@@ -47,6 +50,7 @@ function basename(filePath: string): string {
 // ── File Menu ─────────────────────────────────────────────────────────────────
 
 function FileMenu() {
+  const t = useT();
   const { program, load, save, saveAs } = useProgramStore();
   const filePath = useProgramStore((s) => s.filePath);
   const selectedPatternName = useProgramStore((s) => s.selectedPatternName);
@@ -90,45 +94,157 @@ function FileMenu() {
         onClick={() => setOpen((v) => !v)}
         className="px-3 py-1 text-sm rounded hover:bg-gray-700"
       >
-        File
+        {t('menu.file')}
       </button>
       {open && (
         <div className="absolute top-full left-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-xl z-50 min-w-44 py-1">
-          {item('Open...', load)}
-          {item('Save', save, !program)}
-          {item('Save As...', saveAs, !program)}
+          {item(t('menu.open'), load)}
+          {item(t('menu.save'), save, !program)}
+          {item(t('menu.saveAs'), saveAs, !program)}
           <div className="my-1 border-t border-gray-700" />
-          {item('Load Background Image...', loadBackgroundImage, !patternKey)}
+          {item(t('menu.loadBg'), loadBackgroundImage, !patternKey)}
         </div>
       )}
     </div>
   );
 }
 
+// ── Version Selector ──────────────────────────────────────────────────────────
+
+function VersionSelector() {
+  const t = useT();
+  const softwareType    = useSettingsStore((s) => s.softwareType);
+  const version         = useSettingsStore((s) => s.version);
+  const setSoftwareType = useSettingsStore((s) => s.setSoftwareType);
+  const setVersion      = useSettingsStore((s) => s.setVersion);
+  const reloadWithProfile = useProgramStore((s) => s.reloadWithProfile);
+
+  const [open, setOpen]             = useState(false);
+  const [errorDialog, setErrorDialog] = useState<{ profile: string; previous: string } | null>(null);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
+
+  const currentLabel = `${softwareType} V${version}`;
+
+  const handleSelect = useCallback(async (profile: SyntaxProfile) => {
+    setOpen(false);
+    if (profile.softwareType === softwareType && profile.version === version) return;
+
+    const previousLabel = currentLabel;
+    const newLabel = profileLabel(profile);
+
+    // Optimistically update settings
+    await setSoftwareType(profile.softwareType);
+    await setVersion(profile.version);
+
+    // Re-parse the current file with the new profile
+    const ok = await reloadWithProfile(profile);
+    if (!ok) {
+      // Revert settings
+      const prev = getProfile(softwareType, version);
+      await setSoftwareType(prev.softwareType);
+      await setVersion(prev.version);
+      setErrorDialog({ profile: newLabel, previous: previousLabel });
+    }
+  }, [softwareType, version, currentLabel, setSoftwareType, setVersion, reloadWithProfile]);
+
+  return (
+    <>
+      <div ref={ref} className="relative">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="flex items-center gap-1 px-2 py-0.5 text-xs text-gray-400 font-mono rounded hover:bg-gray-700 hover:text-gray-200 transition-colors"
+        >
+          {currentLabel}
+          <span className="text-[8px] text-gray-500">▾</span>
+        </button>
+        {open && (
+          <div className="absolute top-full left-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-xl z-50 py-1 min-w-[110px]">
+            {PROFILES.map((p) => {
+              const label = profileLabel(p);
+              const active = p.softwareType === softwareType && p.version === version;
+              return (
+                <button
+                  key={label}
+                  onClick={() => handleSelect(p)}
+                  className={[
+                    'w-full text-left px-4 py-1.5 text-xs font-mono transition-colors',
+                    active
+                      ? 'text-blue-300 bg-blue-900/30'
+                      : 'text-gray-300 hover:bg-gray-600',
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {errorDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-80">
+            <h3 className="text-sm font-semibold text-gray-100 mb-3">{t('version.err.title')}</h3>
+            <p className="text-sm text-gray-300 mb-5">
+              {t('version.err.body', { profile: errorDialog.profile, previous: errorDialog.previous })}
+            </p>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setErrorDialog(null)}
+                className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
+              >
+                {t('version.err.ok')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ── Toolbar ───────────────────────────────────────────────────────────────────
 
 function Toolbar() {
+  const t = useT();
   const { filePath, isDirty } = useProgramStore();
-  const { softwareType, version } = useSettingsStore();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   return (
-    <header className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700 shrink-0">
-      <FileMenu />
-      <button className="px-3 py-1 text-sm rounded hover:bg-gray-700">Settings</button>
-      <div className="w-px h-4 bg-gray-600 mx-1" />
-      <span className="text-xs text-gray-400 font-mono">{softwareType} v{version}</span>
-      <div className="w-px h-4 bg-gray-600 mx-1" />
-      <span className="flex-1 text-sm text-gray-300 truncate">
-        {filePath ? (
-          <>
-            {basename(filePath)}
-            {isDirty && <span className="text-yellow-400 ml-1">*</span>}
-          </>
-        ) : (
-          <span className="text-gray-500">No file open</span>
-        )}
-      </span>
-    </header>
+    <>
+      <header className="flex items-center gap-2 px-3 py-1.5 bg-gray-800 border-b border-gray-700 shrink-0">
+        <FileMenu />
+        <button
+          onClick={() => setSettingsOpen(true)}
+          className="px-3 py-1 text-sm rounded hover:bg-gray-700"
+        >
+          {t('menu.settings')}
+        </button>
+        <div className="w-px h-4 bg-gray-600 mx-1" />
+        <VersionSelector />
+        <div className="w-px h-4 bg-gray-600 mx-1" />
+        <span className="flex-1 text-sm text-gray-300 truncate">
+          {filePath ? (
+            <>
+              {basename(filePath)}
+              {isDirty && <span className="text-yellow-400 ml-1">*</span>}
+            </>
+          ) : (
+            <span className="text-gray-500">{t('toolbar.noFile')}</span>
+          )}
+        </span>
+      </header>
+      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+    </>
   );
 }
 
@@ -155,6 +271,7 @@ function NewSubpatternDialog({
   onConfirm: (name: string, copyFrom: string | null) => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   const [name, setName] = useState('');
   const [copyFrom, setCopyFrom] = useState('__empty__');
   const inputRef = useRef<HTMLInputElement>(null);
@@ -163,9 +280,9 @@ function NewSubpatternDialog({
 
   const existingNames = useMemo(() => new Set(patterns.map((p) => p.name)), [patterns]);
   const nameError = !name.trim()
-    ? 'Name cannot be empty'
+    ? t('dialog.newSub.errEmpty')
     : existingNames.has(name.trim())
-    ? 'A subpattern with this name already exists'
+    ? t('dialog.newSub.errExists')
     : null;
 
   const handleConfirm = () => {
@@ -184,10 +301,10 @@ function NewSubpatternDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-72">
-        <h3 className="text-sm font-semibold text-gray-100 mb-4">New Subpattern</h3>
+        <h3 className="text-sm font-semibold text-gray-100 mb-4">{t('dialog.newSub.title')}</h3>
 
         <div className="mb-3">
-          <label className="block text-xs text-gray-400 mb-1">Name</label>
+          <label className="block text-xs text-gray-400 mb-1">{t('dialog.newSub.name')}</label>
           <input
             ref={inputRef}
             value={name}
@@ -200,13 +317,13 @@ function NewSubpatternDialog({
         </div>
 
         <div className="mb-5">
-          <label className="block text-xs text-gray-400 mb-1">Copy from</label>
+          <label className="block text-xs text-gray-400 mb-1">{t('dialog.newSub.copyFrom')}</label>
           <select
             value={copyFrom}
             onChange={(e) => setCopyFrom(e.target.value)}
             className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1.5 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
           >
-            <option value="__empty__">Empty</option>
+            <option value="__empty__">{t('dialog.newSub.empty')}</option>
             {patterns.map((p) => (
               <option key={p.name} value={p.name}>{p.name}</option>
             ))}
@@ -218,14 +335,14 @@ function NewSubpatternDialog({
             onClick={onCancel}
             className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
           >
-            Cancel
+            {t('dialog.cancel')}
           </button>
           <button
             onClick={handleConfirm}
             disabled={Boolean(nameError)}
             className="px-3 py-1.5 text-sm bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-default text-white rounded"
           >
-            Create
+            {t('dialog.create')}
           </button>
         </div>
       </div>
@@ -244,6 +361,7 @@ function DeleteSubpatternDialog({
   onConfirm: () => void;
   onCancel: () => void;
 }) {
+  const t = useT();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { onCancel(); e.stopPropagation(); }
@@ -256,24 +374,22 @@ function DeleteSubpatternDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-72">
-        <h3 className="text-sm font-semibold text-gray-100 mb-3">Delete Subpattern</h3>
+        <h3 className="text-sm font-semibold text-gray-100 mb-3">{t('dialog.delSub.title')}</h3>
         <p className="text-sm text-gray-300 mb-5">
-          Delete subpattern{' '}
-          <span className="text-white font-mono font-semibold">'{name}'</span>
-          {' '}and all its commands?
+          {t('dialog.delSub.body', { name: `'${name}'` })}
         </p>
         <div className="flex gap-2 justify-end">
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
           >
-            Cancel
+            {t('dialog.cancel')}
           </button>
           <button
             onClick={onConfirm}
             className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded"
           >
-            Delete
+            {t('dialog.delete')}
           </button>
         </div>
       </div>
@@ -284,6 +400,7 @@ function DeleteSubpatternDialog({
 // ── Pattern Selector ──────────────────────────────────────────────────────────
 
 function PatternSelector() {
+  const t = useT();
   const { program, selectedPatternName, selectPattern,
           createSubpattern, deleteSubpattern } = useProgramStore();
   const historyPanelOpen    = useUIStore((s) => s.historyPanelOpen);
@@ -306,7 +423,7 @@ function PatternSelector() {
     return () => window.removeEventListener('mousedown', handler, true);
   }, [dropdownOpen]);
 
-  if (!program) return <div className="px-3 py-2 text-xs text-gray-500 shrink-0">No file open</div>;
+  if (!program) return <div className="px-3 py-2 text-xs text-gray-500 shrink-0">{t('pattern.noFile')}</div>;
 
   const canDelete = selectedPatternName !== null;
 
@@ -318,7 +435,7 @@ function PatternSelector() {
           {/* + part: open New dialog directly */}
           <button
             onClick={() => { setDropdownOpen(false); setShowNewDialog(true); }}
-            title="New subpattern"
+            title={t('pattern.newSubpattern')}
             className="flex items-center justify-center w-6 h-7 rounded-l bg-gray-700 hover:bg-gray-600 border border-gray-600 border-r-0 text-gray-200 text-base leading-none"
           >
             +
@@ -337,7 +454,7 @@ function PatternSelector() {
                   onClick={() => { setDropdownOpen(false); setShowNewDialog(true); }}
                   className="flex items-center w-full px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-700/60 text-left"
                 >
-                  New Subpattern
+                  {t('pattern.newSubpattern')}
                 </button>
                 <button
                   onClick={() => {
@@ -349,7 +466,7 @@ function PatternSelector() {
                   title={!canDelete ? 'Cannot delete Main block' : undefined}
                   className="flex items-center w-full px-3 py-1.5 text-xs text-red-400 hover:bg-gray-700/60 disabled:opacity-40 disabled:cursor-default text-left"
                 >
-                  Delete Current Subpattern
+                  {t('pattern.deleteSubpattern')}
                 </button>
               </div>
             )}
@@ -362,7 +479,7 @@ function PatternSelector() {
           onChange={(e) => selectPattern(e.target.value === '__main__' ? null : e.target.value)}
           className="flex-1 bg-gray-700 border border-gray-600 rounded px-2 py-1 text-sm text-gray-100 focus:outline-none focus:border-blue-500"
         >
-          <option value="__main__">Main</option>
+          <option value="__main__">{t('pattern.main')}</option>
           {program.patterns.map((p) => (
             <option key={p.name} value={p.name}>{p.name}</option>
           ))}
@@ -371,7 +488,7 @@ function PatternSelector() {
         {/* History toggle */}
         <button
           onClick={() => setHistoryPanelOpen(!historyPanelOpen)}
-          title="Toggle history panel"
+          title={t('pattern.historyToggle')}
           className={[
             'shrink-0 w-7 h-7 flex items-center justify-center rounded transition-colors',
             historyPanelOpen
@@ -409,6 +526,7 @@ function PatternSelector() {
 // ── Text Pane ─────────────────────────────────────────────────────────────────
 
 function TextPane() {
+  const t = useT();
   const { program, selectedPatternName } = useProgramStore();
 
   // Main-block lines (read-only display; Main block commands are not selectable)
@@ -422,7 +540,7 @@ function TextPane() {
   if (!program) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
-        Open a .prg file to begin
+        {t('app.openFile')}
       </div>
     );
   }
@@ -441,11 +559,31 @@ function TextPane() {
   );
 }
 
+// ── Expand/collapse all helpers ───────────────────────────────────────────────
+
+/** Collect all positional group keys in depth-first order, mirroring the key
+ *  scheme used by buildFlatItemsInner in PatternCommandList.tsx. */
+function collectAllGroupKeys(
+  commands: import('@lib/types').PatternCommand[],
+  keyPrefix = '',
+  result: string[] = [],
+): string[] {
+  commands.forEach((cmd, i) => {
+    if (cmd.kind === 'Group') {
+      const key = keyPrefix ? `${keyPrefix}-${i}` : String(i);
+      result.push(key);
+      collectAllGroupKeys(cmd.commands, key, result);
+    }
+  });
+  return result;
+}
+
 // ── Command Pane ──────────────────────────────────────────────────────────────
 // Routes to raw text (Main block) or structured command list (patterns),
 // or to PlainTextEditor when plain text mode is active.
 
 function CommandPane() {
+  const t = useT();
   const {
     program, selectedPatternName, filePath,
     selectedCommandIds, lastSelectedId,
@@ -453,7 +591,9 @@ function CommandPane() {
     reorderCommands,
   } = useProgramStore();
   const { showMenu } = useCommandContextMenu();
-  const plainTextMode = useUIStore((s) => s.plainTextMode);
+  const plainTextMode       = useUIStore((s) => s.plainTextMode);
+  const expandAllTrigger    = useUIStore((s) => s.expandAllTrigger);
+  const collapseAllTrigger  = useUIStore((s) => s.collapseAllTrigger);
 
   // Per-pattern expanded-group tracking. Lives here (not in PatternCommandList) so
   // state persists when switching to the main block view and back.
@@ -478,10 +618,29 @@ function CommandPane() {
     [selectedPatternName],
   );
 
+  // Expand all groups in the current pattern when triggered from the context menu
+  useEffect(() => {
+    if (expandAllTrigger === 0) return;
+    const { program: prog, selectedPatternName: patName } = useProgramStore.getState();
+    if (!prog || !patName) return;
+    const pattern = prog.patterns.find((p) => p.name === patName);
+    if (!pattern) return;
+    const allKeys = collectAllGroupKeys(pattern.commands);
+    setExpandedGroups(() => new Set(allKeys));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandAllTrigger, setExpandedGroups]);
+
+  // Collapse all groups in the current pattern when triggered from the context menu
+  useEffect(() => {
+    if (collapseAllTrigger === 0) return;
+    setExpandedGroups(() => new Set());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [collapseAllTrigger, setExpandedGroups]);
+
   if (!program) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
-        Open a .prg file to begin
+        {t('app.openFile')}
       </div>
     );
   }
@@ -685,6 +844,7 @@ function PlainTextEditor({ selectedPatternName }: { selectedPatternName: string 
 
 /** Checkbox + parse-status indicator that live in the pattern-selector bar. */
 function RawModeToggle() {
+  const t                    = useT();
   const plainTextMode        = useUIStore((s) => s.plainTextMode);
   const setPlainTextMode     = useUIStore((s) => s.setPlainTextMode);
   const plainTextParseStatus = useUIStore((s) => s.plainTextParseStatus);
@@ -727,7 +887,7 @@ function RawModeToggle() {
           )
         )}
         <label className="flex items-center gap-1 cursor-pointer select-none">
-          <span className="text-xs text-gray-400">Raw</span>
+          <span className="text-xs text-gray-400">{t('raw.label')}</span>
           <input
             type="checkbox"
             checked={plainTextMode}
@@ -742,13 +902,8 @@ function RawModeToggle() {
 
 // ── Search Bar ────────────────────────────────────────────────────────────────
 
-const SCOPE_LABELS: Record<SearchScope, string> = {
-  pattern: 'Current Pattern',
-  program: 'Entire Program',
-  selection: 'Selection Only',
-};
-
 function SearchBar() {
+  const t           = useT();
   const inputRef    = useRef<HTMLInputElement>(null);
   const replaceRef  = useRef<HTMLInputElement>(null);
 
@@ -839,13 +994,14 @@ function SearchBar() {
 
   const handleReplaceAll = () => {
     if (searchMatchList.length === 0) return;
+    const n = searchMatchList.length;
     const count = applySearchReplace(
       searchMatchList,
       searchQuery,
       replaceText,
-      `Replace All: ${searchMatchList.length} occurrence${searchMatchList.length !== 1 ? 's' : ''}`,
+      `Replace All: ${n} occurrence${n !== 1 ? 's' : ''}`,
     );
-    showToast(`Replaced ${count} occurrence${count !== 1 ? 's' : ''}`);
+    showToast(t('search.replacedCount', { count: String(count) }));
   };
 
   const totalCount = searchMatchList.length;
@@ -858,7 +1014,7 @@ function SearchBar() {
         {/* Chevron toggle */}
         <button
           onClick={() => setReplaceOpen((v) => !v)}
-          title={replaceOpen ? 'Hide replace' : 'Show replace (Ctrl+H)'}
+          title={replaceOpen ? t('search.hideReplace') : t('search.showReplace')}
           className="text-gray-500 hover:text-gray-300 w-3 h-3 flex items-center justify-center shrink-0 leading-none"
           tabIndex={-1}
         >
@@ -877,7 +1033,7 @@ function SearchBar() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search…"
+            placeholder={t('search.placeholder')}
             className={[
               'w-[160px] pl-6 pr-6 py-0.5 bg-gray-700 border rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors',
               searchQuery.trim() && totalCount === 0
@@ -899,7 +1055,7 @@ function SearchBar() {
         {/* Match count */}
         {searchQuery.trim() && (
           <span className={`text-[10px] shrink-0 tabular-nums ${totalCount === 0 ? 'text-red-400' : 'text-gray-400'}`}>
-            {totalCount === 0 ? 'No matches' : `${currentCount ?? 0}/${totalCount}`}
+            {totalCount === 0 ? t('search.noMatches') : `${currentCount ?? 0}/${totalCount}`}
           </span>
         )}
 
@@ -909,13 +1065,13 @@ function SearchBar() {
           onChange={(e) => setSearchScope(e.target.value as SearchScope)}
           className="bg-gray-700 border border-gray-600 rounded px-1 py-0.5 text-[10px] text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
         >
-          {(Object.keys(SCOPE_LABELS) as SearchScope[]).map((s) => (
+          {(['pattern', 'program', 'selection'] as SearchScope[]).map((s) => (
             <option
               key={s}
               value={s}
               disabled={s === 'selection' && selectedCommandIds.size === 0}
             >
-              {SCOPE_LABELS[s]}
+              {t(`search.scope.${s}`)}
             </option>
           ))}
         </select>
@@ -941,7 +1097,7 @@ function SearchBar() {
                 if (e.key === 'Escape') { setReplaceOpen(false); inputRef.current?.focus(); }
                 e.stopPropagation();
               }}
-              placeholder="Replace with…"
+              placeholder={t('search.replacePh')}
               className="w-[160px] pl-6 py-0.5 bg-gray-700 border border-gray-600 rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-blue-500 transition-colors"
             />
           </div>
@@ -950,14 +1106,14 @@ function SearchBar() {
             disabled={!searchQuery.trim() || searchMatchList.length === 0}
             className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 disabled:opacity-40 disabled:cursor-default text-gray-300 shrink-0"
           >
-            Replace
+            {t('search.replaceBtn')}
           </button>
           <button
             onClick={handleReplaceAll}
             disabled={!searchQuery.trim() || searchMatchList.length === 0}
             className="px-2 py-0.5 text-[10px] bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 disabled:opacity-40 disabled:cursor-default text-gray-300 shrink-0"
           >
-            All
+            {t('search.allBtn')}
           </button>
         </div>
       )}
@@ -981,6 +1137,7 @@ function DiscardPlainTextDialog({
   onDiscard: () => void;
   onStay: () => void;
 }) {
+  const t = useT();
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { onStay(); e.stopPropagation(); }
@@ -992,22 +1149,22 @@ function DiscardPlainTextDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
       <div className="bg-gray-900 border border-gray-700 rounded-lg shadow-2xl p-5 w-80">
-        <h3 className="text-sm font-semibold text-gray-100 mb-3">Syntax errors in text</h3>
+        <h3 className="text-sm font-semibold text-gray-100 mb-3">{t('dialog.discard.title')}</h3>
         <p className="text-sm text-gray-300 mb-5">
-          The text has syntax errors. Discard changes and revert to the last valid state?
+          {t('dialog.discard.body')}
         </p>
         <div className="flex gap-2 justify-end">
           <button
             onClick={onStay}
             className="px-3 py-1.5 text-sm bg-gray-700 hover:bg-gray-600 text-gray-300 rounded"
           >
-            Stay in Plain Text
+            {t('dialog.discard.stay')}
           </button>
           <button
             onClick={onDiscard}
             className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded"
           >
-            Discard
+            {t('dialog.discard.discard')}
           </button>
         </div>
       </div>
@@ -1018,8 +1175,9 @@ function DiscardPlainTextDialog({
 // ── Status Bar ────────────────────────────────────────────────────────────────
 
 function StatusBar() {
+  const t = useT();
   const { program, isDirty } = useProgramStore();
-  const { zoomLevel, cursorCoords, splitRatio } = useUIStore();
+  const { zoomLevel, cursorCoords, splitRatio, triggerFitToView } = useUIStore();
 
   // Mirror the main split: canvas% + ToolPanel (40px) + drag handle (4px)
   const leftWidth = `calc(${splitRatio * 100}% + 44px)`;
@@ -1032,7 +1190,7 @@ function StatusBar() {
         style={{ width: leftWidth }}
       >
         <span className={isDirty ? 'text-yellow-400' : program ? 'text-green-400' : ''}>
-          {program ? (isDirty ? 'Modified' : 'Ready') : 'No file'}
+          {program ? (isDirty ? t('status.modified') : t('status.ready')) : t('status.noFile')}
         </span>
         {cursorCoords && (
           <span>x: {cursorCoords.x.toFixed(3)}, y: {cursorCoords.y.toFixed(3)}</span>
@@ -1043,7 +1201,13 @@ function StatusBar() {
       <div className="flex flex-1 items-start gap-3 px-3 py-1 min-w-0">
         {program && <SearchBar />}
         <span className="flex-1" />
-        <span className="shrink-0 self-center">{zoomLevel.toFixed(1)}x</span>
+        <button
+          onClick={triggerFitToView}
+          title={t('status.fitView')}
+          className="shrink-0 self-center hover:text-blue-300 transition-colors cursor-pointer"
+        >
+          {zoomLevel.toFixed(1)}x
+        </button>
       </div>
     </footer>
   );
@@ -1052,6 +1216,7 @@ function StatusBar() {
 // ── Save Error Toast ──────────────────────────────────────────────────────────
 
 function SaveErrorToast() {
+  const t = useT();
   const { saveError, clearSaveError, saveAs } = useProgramStore();
   if (!saveError) return null;
   return (
@@ -1061,7 +1226,7 @@ function SaveErrorToast() {
         onClick={() => { saveAs(); clearSaveError(); }}
         className="shrink-0 bg-red-700 hover:bg-red-600 px-2 py-0.5 rounded text-xs whitespace-nowrap"
       >
-        Save As…
+        {t('error.saveAs')}
       </button>
       <button
         onClick={clearSaveError}

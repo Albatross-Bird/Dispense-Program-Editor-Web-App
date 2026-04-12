@@ -9,6 +9,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('dialog:saveFileAs', content, defaultPath),
   loadImage: () =>
     ipcRenderer.invoke('dialog:loadImage'),
+  readFile: (filePath: string) =>
+    ipcRenderer.invoke('fs:readFile', filePath),
+  readImage: (filePath: string) =>
+    ipcRenderer.invoke('fs:readImage', filePath),
   storeGet: (key: string) =>
     ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown) =>

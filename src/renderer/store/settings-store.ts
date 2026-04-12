@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import type { SoftwareType } from '@lib/syntax-profiles';
+import type { Lang } from '@lib/i18n';
 
 export const DEFAULT_LINE_THICKNESS = 0.5; // mm
 export const DEFAULT_DOT_SIZE       = 1.0; // mm diameter
@@ -36,6 +37,7 @@ export const DEFAULT_BG_IMAGE_SETTINGS: BgImageSettings = {
 interface SettingsStore {
   softwareType: SoftwareType;
   version: string;
+  language: Lang;
   recentFiles: string[];
   loaded: boolean;
   /** Per-param (0-indexed) line stroke width in mm. Index 0 = Param 1. */
@@ -48,6 +50,7 @@ interface SettingsStore {
   init: () => Promise<void>;
   setSoftwareType: (type: SoftwareType) => Promise<void>;
   setVersion: (version: string) => Promise<void>;
+  setLanguage: (lang: Lang) => Promise<void>;
   addRecentFile: (filePath: string) => Promise<void>;
   setLineThickness: (paramIndex: number, mm: number) => Promise<void>;
   setDotSize: (paramIndex: number, mm: number) => Promise<void>;
@@ -63,6 +66,7 @@ async function storeGet<T>(key: string, fallback: T): Promise<T> {
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   softwareType: 'MYD',
   version: '1.0',
+  language: 'en',
   recentFiles: [],
   loaded: false,
   lineThicknesses: Array(10).fill(DEFAULT_LINE_THICKNESS),
@@ -72,11 +76,12 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   init: async () => {
     const softwareType    = await storeGet<SoftwareType>('softwareType', 'MYD');
     const version         = await storeGet<string>('version', '1.0');
+    const language        = await storeGet<Lang>('language', 'en');
     const recentFiles     = await storeGet<string[]>('recentFiles', []);
     const lineThicknesses = await storeGet<number[]>('lineThicknesses', Array(10).fill(DEFAULT_LINE_THICKNESS));
     const dotSizes        = await storeGet<number[]>('dotSizes', Array(10).fill(DEFAULT_DOT_SIZE));
     const bgImageSettings = await storeGet<Record<string, BgImageSettings>>('bgImageSettings', {});
-    set({ softwareType, version, recentFiles, lineThicknesses, dotSizes, bgImageSettings, loaded: true });
+    set({ softwareType, version, language, recentFiles, lineThicknesses, dotSizes, bgImageSettings, loaded: true });
   },
 
   setSoftwareType: async (softwareType: SoftwareType) => {
@@ -87,6 +92,11 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   setVersion: async (version: string) => {
     await window.electronAPI.storeSet('version', version);
     set({ version });
+  },
+
+  setLanguage: async (language: Lang) => {
+    await window.electronAPI.storeSet('language', language);
+    set({ language });
   },
 
   addRecentFile: async (filePath: string) => {

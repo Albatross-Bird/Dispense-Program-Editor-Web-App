@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { PatternCommand } from '@lib/types';
 import type { SearchScope, SearchMatch } from '@lib/search';
+import type { CalibPoint } from '@lib/affine';
 
 const SPLIT_KEY = 'splitRatio';
 
@@ -22,7 +23,7 @@ export type ActiveTool = 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 
 
 export interface ContextMenuItem {
   label?: string;
-  icon?: 'copy' | 'cut' | 'paste' | 'delete' | 'edit';
+  icon?: 'copy' | 'cut' | 'paste' | 'delete' | 'edit' | 'expand-all' | 'collapse-all';
   shortcut?: string;
   disabled?: boolean;
   disabledReason?: string;
@@ -53,6 +54,17 @@ interface UIStore {
   areaFillPreviewCmds: PatternCommand[];
   /** When non-null, the area-fill panel is editing an existing group rather than creating a new one. */
   areaFillEditGroupId: string | null;
+
+  /** Incremented each time the status-bar zoom is clicked; Canvas watches this to fit-to-view. */
+  fitToViewTrigger: number;
+  triggerFitToView: () => void;
+
+  /** Incremented to request expanding all groups in the current pattern. */
+  expandAllTrigger: number;
+  triggerExpandAll: () => void;
+  /** Incremented to request collapsing all groups in the current pattern. */
+  collapseAllTrigger: number;
+  triggerCollapseAll: () => void;
 
   setSplitRatio: (ratio: number) => void;
   setZoomLevel: (zoom: number) => void;
@@ -110,6 +122,15 @@ interface UIStore {
   pendingCommentText: string;
   setPendingCommentText: (text: string) => void;
 
+  // ── Pending background images ─────────────────────────────────────────────
+  /**
+   * Patterns that have a `##BG_IMAGE:` metadata comment stored in their commands.
+   * Key = `${filePath}::${patternName}`. Value = parsed image path + calibration points.
+   * The image is NOT loaded into memory until the user explicitly enables it.
+   */
+  pendingBgImages: Record<string, { filePath: string; points: CalibPoint[] }>;
+  setPendingBgImage: (key: string, data: { filePath: string; points: CalibPoint[] } | null) => void;
+
   // ── Plain text mode ──────────────────────────────────────────────────────────
   plainTextMode: boolean;
   setPlainTextMode: (v: boolean) => void;
@@ -122,6 +143,12 @@ interface UIStore {
 export const useUIStore = create<UIStore>((set, get) => ({
   splitRatio: getInitialSplit(),
   zoomLevel: 1,
+  fitToViewTrigger: 0,
+  triggerFitToView: () => set((s) => ({ fitToViewTrigger: s.fitToViewTrigger + 1 })),
+  expandAllTrigger: 0,
+  triggerExpandAll: () => set((s) => ({ expandAllTrigger: s.expandAllTrigger + 1 })),
+  collapseAllTrigger: 0,
+  triggerCollapseAll: () => set((s) => ({ collapseAllTrigger: s.collapseAllTrigger + 1 })),
   panOffset: { x: 0, y: 0 },
   cursorCoords: null,
   backgroundImages: {},
@@ -178,6 +205,15 @@ export const useUIStore = create<UIStore>((set, get) => ({
     return { searchFocusedIdx: ((s.searchFocusedIdx + dir) % n + n) % n };
   }),
   clearSearch: () => set({ searchQuery: '', searchMatchList: [], searchFocusedIdx: 0 }),
+
+  pendingBgImages: {},
+  setPendingBgImage: (key, data) => set((s) => {
+    if (data === null) {
+      const { [key]: _removed, ...rest } = s.pendingBgImages;
+      return { pendingBgImages: rest };
+    }
+    return { pendingBgImages: { ...s.pendingBgImages, [key]: data } };
+  }),
 
   chainMode: false,
   setChainMode: (chainMode: boolean) => set({ chainMode }),

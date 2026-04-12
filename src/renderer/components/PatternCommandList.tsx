@@ -496,6 +496,12 @@ export default function PatternCommandList({
           onClick={(e) => {
             if (e.target === e.currentTarget) onClear();
           }}
+          onContextMenu={(e) => {
+            if (e.target === e.currentTarget) {
+              e.preventDefault();
+              onContextMenu?.(e, undefined);
+            }
+          }}
         >
           {items.map((item, idx) => {
             const { cmdId } = item;

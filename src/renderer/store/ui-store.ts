@@ -19,7 +19,7 @@ export interface BackgroundImage {
   dataUrl: string;
 }
 
-export type ActiveTool = 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item' | null;
+export type ActiveTool = 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'contour-fill' | 'split-line' | 'join-lines' | 'delete-item' | null;
 
 export interface ContextMenuItem {
   label?: string;
@@ -55,6 +55,15 @@ interface UIStore {
   /** When non-null, the area-fill panel is editing an existing group rather than creating a new one. */
   areaFillEditGroupId: string | null;
 
+  /** Contour-fill polygon state (world-space vertices). */
+  contourFillPolygon: [number, number][];
+  /** True once the contour-fill polygon has been closed by the user. */
+  contourFillClosed: boolean;
+  /** Live preview commands for contour fill (empty = no preview). */
+  contourFillPreviewCmds: PatternCommand[];
+  /** When non-null, the contour-fill panel is editing an existing group. */
+  contourFillEditGroupId: string | null;
+
   /** Incremented each time the status-bar zoom is clicked; Canvas watches this to fit-to-view. */
   fitToViewTrigger: number;
   triggerFitToView: () => void;
@@ -80,6 +89,12 @@ interface UIStore {
   setAreaFillPreviewCmds: (cmds: PatternCommand[]) => void;
   setAreaFillEditGroupId: (id: string | null) => void;
   clearAreaFill: () => void;
+
+  setContourFillPolygon: (verts: [number, number][]) => void;
+  setContourFillClosed: (closed: boolean) => void;
+  setContourFillPreviewCmds: (cmds: PatternCommand[]) => void;
+  setContourFillEditGroupId: (id: string | null) => void;
+  clearContourFill: () => void;
 
   contextMenu: ContextMenuState | null;
   showContextMenu: (state: ContextMenuState) => void;
@@ -158,6 +173,10 @@ export const useUIStore = create<UIStore>((set, get) => ({
   areaFillClosed: false,
   areaFillPreviewCmds: [],
   areaFillEditGroupId: null,
+  contourFillPolygon: [],
+  contourFillClosed: false,
+  contourFillPreviewCmds: [],
+  contourFillEditGroupId: null,
   contextMenu: null,
 
   setSplitRatio: (ratio: number) => {
@@ -178,6 +197,12 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setAreaFillPreviewCmds: (areaFillPreviewCmds: PatternCommand[]) => set({ areaFillPreviewCmds }),
   setAreaFillEditGroupId: (areaFillEditGroupId: string | null) => set({ areaFillEditGroupId }),
   clearAreaFill: () => set({ areaFillPolygon: [], areaFillClosed: false, areaFillPreviewCmds: [], areaFillEditGroupId: null }),
+
+  setContourFillPolygon: (contourFillPolygon: [number, number][]) => set({ contourFillPolygon }),
+  setContourFillClosed: (contourFillClosed: boolean) => set({ contourFillClosed }),
+  setContourFillPreviewCmds: (contourFillPreviewCmds: PatternCommand[]) => set({ contourFillPreviewCmds }),
+  setContourFillEditGroupId: (contourFillEditGroupId: string | null) => set({ contourFillEditGroupId }),
+  clearContourFill: () => set({ contourFillPolygon: [], contourFillClosed: false, contourFillPreviewCmds: [], contourFillEditGroupId: null }),
 
   showContextMenu: (state: ContextMenuState) => set({ contextMenu: state }),
   hideContextMenu: () => set({ contextMenu: null }),

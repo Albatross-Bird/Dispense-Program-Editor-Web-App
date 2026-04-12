@@ -7,9 +7,10 @@ import type { PatternCommand, GroupNode } from '@lib/types';
 
 export type { ContextMenuItem, ContextMenuState };
 
-// ── Area fill detection ───────────────────────────────────────────────────────
+// ── Area fill / contour fill detection ───────────────────────────────────────
 
-const AREA_FILL_PREFIX = '##AREA_FILL_CONFIG:';
+const AREA_FILL_PREFIX    = '##AREA_FILL_CONFIG:';
+const CONTOUR_FILL_PREFIX = '##CONTOUR_FILL_CONFIG:';
 
 function findAreaFillGroup(
   commands: PatternCommand[],
@@ -21,6 +22,23 @@ function findAreaFillGroup(
       c.id &&
       ids.has(c.id) &&
       c.commands.some((child) => child.kind === 'Comment' && child.text.startsWith(AREA_FILL_PREFIX))
+    ) {
+      return c;
+    }
+  }
+  return null;
+}
+
+function findContourFillGroup(
+  commands: PatternCommand[],
+  ids: Set<string>,
+): GroupNode | null {
+  for (const c of commands) {
+    if (
+      c.kind === 'Group' &&
+      c.id &&
+      ids.has(c.id) &&
+      c.commands.some((child) => child.kind === 'Comment' && child.text.startsWith(CONTOUR_FILL_PREFIX))
     ) {
       return c;
     }
@@ -269,6 +287,9 @@ export function useCommandContextMenu() {
       const areaFillGroup = hasSelection
         ? findAreaFillGroup(commands, selectedCommandIds)
         : null;
+      const contourFillGroup = hasSelection
+        ? findContourFillGroup(commands, selectedCommandIds)
+        : null;
       const singleGroup = hasSelection
         ? findSingleGroup(commands, selectedCommandIds)
         : null;
@@ -306,7 +327,7 @@ export function useCommandContextMenu() {
 
       if (singleGroup) {
         items.push({ separator: true });
-        if (!areaFillGroup) {
+        if (!areaFillGroup && !contourFillGroup) {
           items.push({
             label: 'Rename Group',
             icon: 'edit',
@@ -327,6 +348,17 @@ export function useCommandContextMenu() {
             },
           });
         }
+        if (contourFillGroup) {
+          items.push({
+            label: 'Edit Contour Fill',
+            icon: 'edit',
+            action: () => {
+              useUIStore.getState().setContourFillEditGroupId(contourFillGroup.id!);
+              setActiveTool('contour-fill');
+              hideContextMenu();
+            },
+          });
+        }
       } else if (areaFillGroup) {
         items.push({ separator: true });
         items.push({
@@ -335,6 +367,17 @@ export function useCommandContextMenu() {
           action: () => {
             setAreaFillEditGroupId(areaFillGroup.id!);
             setActiveTool('area-fill');
+            hideContextMenu();
+          },
+        });
+      } else if (contourFillGroup) {
+        items.push({ separator: true });
+        items.push({
+          label: 'Edit Contour Fill',
+          icon: 'edit',
+          action: () => {
+            useUIStore.getState().setContourFillEditGroupId(contourFillGroup.id!);
+            setActiveTool('contour-fill');
             hideContextMenu();
           },
         });

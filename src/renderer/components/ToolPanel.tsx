@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useProgramStore, genId } from '../store/program-store';
 import { useUIStore } from '../store/ui-store';
 import AreaFillPanel, { useAnchorRect } from './AreaFillPanel';
+import ContourFillPanel from './ContourFillPanel';
 import { valveColor } from './visualization/renderers';
 import { useT } from '../hooks/useT';
 
@@ -116,6 +117,20 @@ function JoinLinesIcon() {
   );
 }
 
+/** Concentric rings — represents the Contour Fill tool. */
+function ContourFillIcon() {
+  return (
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      {/* Outer polygon */}
+      <polygon points="8.5,2 15,7 12.5,14.5 4.5,14.5 2,7" />
+      {/* Middle inset contour */}
+      <polygon points="8.5,5 12,8 10.5,12 6.5,12 5,8" strokeWidth="1.1" />
+      {/* Inner dot */}
+      <circle cx="8.5" cy="9" r="1.2" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
 /** Hatched polygon — represents the Area Fill tool. */
 function AreaFillIcon() {
   return (
@@ -211,7 +226,7 @@ function ParamSelector({ activeParam, setActiveParam }: ParamSelectorProps) {
 
 // ── Comment Tool Prompt ────────────────────────────────────────────────────────
 
-const RESERVED_PREFIXES = ['##GROUP:', '##ENDGROUP:', '##AREA_FILL_CONFIG:'];
+const RESERVED_PREFIXES = ['##GROUP:', '##ENDGROUP:', '##AREA_FILL_CONFIG:', '##CONTOUR_FILL_CONFIG:'];
 
 interface CommentToolPromptProps {
   value: string;
@@ -413,8 +428,10 @@ export default function ToolPanel() {
   const activeTool             = useUIStore((s) => s.activeTool);
   // split-line and join-lines are canvas-driven; toolbar just activates them
   const setActiveTool          = useUIStore((s) => s.setActiveTool);
-  const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
-  const setAreaFillEditGroupId = useUIStore((s) => s.setAreaFillEditGroupId);
+  const clearAreaFill              = useUIStore((s) => s.clearAreaFill);
+  const setAreaFillEditGroupId     = useUIStore((s) => s.setAreaFillEditGroupId);
+  const clearContourFill           = useUIStore((s) => s.clearContourFill);
+  const setContourFillEditGroupId  = useUIStore((s) => s.setContourFillEditGroupId);
   const activeParam            = useUIStore((s) => s.activeParam);
   const setActiveParam         = useUIStore((s) => s.setActiveParam);
   const chainMode              = useUIStore((s) => s.chainMode);
@@ -485,20 +502,25 @@ export default function ToolPanel() {
 
   // ── Handlers ────────────────────────────────────────────────────────────────
 
-  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'split-line' | 'join-lines' | 'delete-item') => {
+  const toggleTool = useCallback((tool: 'new-line' | 'new-dot' | 'new-comment' | 'area-fill' | 'contour-fill' | 'split-line' | 'join-lines' | 'delete-item') => {
     if (activeTool === tool) {
       setActiveTool(null);
       if (tool === 'area-fill') clearAreaFill();
+      if (tool === 'contour-fill') clearContourFill();
       if (tool === 'new-comment') setPendingCommentText('');
     } else {
       if (activeTool === 'area-fill') clearAreaFill();
+      if (activeTool === 'contour-fill') clearContourFill();
       if (activeTool === 'new-comment') setPendingCommentText('');
       if (tool === 'area-fill' && selectedGroup?.id) {
         setAreaFillEditGroupId(selectedGroup.id);
       }
+      if (tool === 'contour-fill' && selectedGroup?.id) {
+        setContourFillEditGroupId(selectedGroup.id);
+      }
       setActiveTool(tool);
     }
-  }, [activeTool, setActiveTool, clearAreaFill, setAreaFillEditGroupId, selectedGroup, setPendingCommentText]);
+  }, [activeTool, setActiveTool, clearAreaFill, setAreaFillEditGroupId, clearContourFill, setContourFillEditGroupId, selectedGroup, setPendingCommentText]);
 
   const handleGroupConfirm = useCallback((name: string) => {
     groupSelection(name);
@@ -618,6 +640,13 @@ export default function ToolPanel() {
         disabled={!canEdit}
         onClick={() => toggleTool('area-fill')}
       />
+      <ToolButton
+        icon={<ContourFillIcon />}
+        label={t('tool.contourFill')}
+        active={activeTool === 'contour-fill'}
+        disabled={!canEdit}
+        onClick={() => toggleTool('contour-fill')}
+      />
 
       <Divider />
 
@@ -669,6 +698,12 @@ export default function ToolPanel() {
         <AreaFillPanel
           anchorRect={anchorRect}
           onCancel={() => { setActiveTool(null); clearAreaFill(); }}
+        />
+      )}
+      {activeTool === 'contour-fill' && anchorRect && (
+        <ContourFillPanel
+          anchorRect={anchorRect}
+          onCancel={() => { setActiveTool(null); clearContourFill(); }}
         />
       )}
     </div>

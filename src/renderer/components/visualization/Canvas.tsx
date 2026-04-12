@@ -462,12 +462,20 @@ export function expandSelectedIds(
 ): Set<string> {
   if (selectedIds.size === 0) return selectedIds;
   const expanded = new Set(selectedIds);
+
+  /** Add every descendant of a group's command list into `expanded`. */
+  function addAllDescendants(cmds: PatternCommand[]) {
+    for (const cmd of cmds) {
+      if (cmd.id) expanded.add(cmd.id);
+      if (cmd.kind === 'Group') addAllDescendants(cmd.commands);
+    }
+  }
+
   function recurse(cmds: PatternCommand[]) {
     for (const cmd of cmds) {
       if (cmd.kind === 'Group' && cmd.id && selectedIds.has(cmd.id)) {
-        for (const child of cmd.commands) {
-          if (child.id) expanded.add(child.id);
-        }
+        // Fully expand all descendants, not just direct children
+        addAllDescendants(cmd.commands);
       } else if (cmd.kind === 'Group') {
         recurse(cmd.commands);
       }
@@ -956,6 +964,13 @@ export default function Canvas() {
   const setAreaFillClosed      = useUIStore((s) => s.setAreaFillClosed);
   const clearAreaFill          = useUIStore((s) => s.clearAreaFill);
 
+  // ── Contour fill state ─────────────────────────────────────────────────────
+  const contourFillPolygon        = useUIStore((s) => s.contourFillPolygon);
+  const contourFillClosed         = useUIStore((s) => s.contourFillClosed);
+  const contourFillPreviewCmds    = useUIStore((s) => s.contourFillPreviewCmds);
+  const setContourFillPolygon     = useUIStore((s) => s.setContourFillPolygon);
+  const setContourFillClosed      = useUIStore((s) => s.setContourFillClosed);
+
   // Stable refs for use inside window-level callbacks
   // ── Split / join hover state ──────────────────────────────────────────────
   type SplitHover = { cmdId: string; splitPoint: [number,number,number]; sx: number; sy: number } | null;
@@ -970,6 +985,13 @@ export default function Canvas() {
   useEffect(() => { areaFillPolygonRef.current = areaFillPolygon; }, [areaFillPolygon]);
   useEffect(() => { areaFillClosedRef.current = areaFillClosed; }, [areaFillClosed]);
   useEffect(() => { areaFillPreviewCmdsRef.current = areaFillPreviewCmds; }, [areaFillPreviewCmds]);
+
+  const contourFillPolygonRef     = useRef(contourFillPolygon);
+  const contourFillClosedRef      = useRef(contourFillClosed);
+  const contourFillPreviewCmdsRef = useRef(contourFillPreviewCmds);
+  useEffect(() => { contourFillPolygonRef.current = contourFillPolygon; }, [contourFillPolygon]);
+  useEffect(() => { contourFillClosedRef.current = contourFillClosed; }, [contourFillClosed]);
+  useEffect(() => { contourFillPreviewCmdsRef.current = contourFillPreviewCmds; }, [contourFillPreviewCmds]);
 
   // Cursor world position for rubber-band (ref only — no React state)
   const polygonCursorRef = useRef<[number, number] | null>(null);
@@ -989,6 +1011,10 @@ export default function Canvas() {
   }
   const polyDragRef = useRef<PolyDragState | null>(null);
   const polyDragCleanupRef = useRef<(() => void) | null>(null);
+
+  // Contour fill drag state (same shape as area fill)
+  const contourPolyDragRef = useRef<PolyDragState | null>(null);
+  const contourPolyDragCleanupRef = useRef<(() => void) | null>(null);
 
   // Sync placementPhase with activeTool
   useEffect(() => {
@@ -1241,12 +1267,20 @@ export default function Canvas() {
           ? dragWorkingCmdsRef.current
           : commands;
 
-      // When editing a closed area-fill polygon, hide existing commands whose
-      // key points fall inside the polygon so the semi-transparent preview is
-      // unobstructed.
-      const poly = areaFillPolygonRef.current;
+      // When editing a closed area-fill or contour-fill polygon, hide existing
+      // commands whose key points fall inside the polygon so the semi-transparent
+      // preview is unobstructed.
+      const poly =
+        activeToolRef.current === 'contour-fill'
+          ? contourFillPolygonRef.current
+          : areaFillPolygonRef.current;
+      const isPolyClosed =
+        activeToolRef.current === 'contour-fill'
+          ? contourFillClosedRef.current
+          : areaFillClosedRef.current;
       const cmdsForFrame =
-        activeToolRef.current === 'area-fill' && areaFillClosedRef.current && poly.length >= 3
+        (activeToolRef.current === 'area-fill' || activeToolRef.current === 'contour-fill') &&
+        isPolyClosed && poly.length >= 3
           ? filterOutsidePolygon(cmdsToRender, poly)
           : cmdsToRender;
 
@@ -1298,6 +1332,34 @@ export default function Canvas() {
           areaFillPolygonRef.current,
           areaFillClosedRef.current,
           areaFillClosedRef.current ? null : polygonCursorRef.current,
+          cameraRef.current,
+          polyActiveVertIdxRef.current,
+        );
+      }
+
+      // Draw contour fill polygon overlay (always on top)
+      if (activeToolRef.current === 'contour-fill') {
+        const previewCmds = contourFillPreviewCmdsRef.current;
+        if (previewCmds.length > 0) {
+          ctx.save();
+          ctx.globalAlpha = 0.45;
+          const noSelection = new Set<string>();
+          const previewConnected = computeConnectedStarts(previewCmds);
+          for (const cmd of previewCmds) {
+            drawCommand(ctx, cmd, cameraRef.current, noSelection, new Set(), previewConnected, { lineThicknesses, dotSizes });
+          }
+          ctx.restore();
+          ctx.save();
+          ctx.globalAlpha = 1.0;
+          drawCommand(ctx, previewCmds[0], cameraRef.current, new Set<string>(), new Set(), previewConnected, { lineThicknesses, dotSizes }, new Set(), undefined, '#a78bfa');
+          ctx.restore();
+        }
+
+        drawAreaFillOverlay(
+          ctx,
+          contourFillPolygonRef.current,
+          contourFillClosedRef.current,
+          contourFillClosedRef.current ? null : polygonCursorRef.current,
           cameraRef.current,
           polyActiveVertIdxRef.current,
         );
@@ -1367,7 +1429,7 @@ export default function Canvas() {
       }
     };
     requestAnimationFrame(drawRef.current);
-  }, [commands, selectedCommandIds, processedImg, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, lineThicknesses, dotSizes, searchMatchIds]);
+  }, [commands, selectedCommandIds, processedImg, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, contourFillPolygon, contourFillClosed, contourFillPreviewCmds, lineThicknesses, dotSizes, searchMatchIds]);
 
   // Pan canvas to center on the currently focused search match
   useEffect(() => {
@@ -1650,6 +1712,59 @@ export default function Canvas() {
       window.removeEventListener('mouseup', handleUp);
     };
   }, [setAreaFillPolygon]);
+
+  const startContourPolyDrag = useCallback((
+    type: 'vertex' | 'polygon',
+    startSx: number,
+    startSy: number,
+    vertexIdx?: number,
+  ) => {
+    const [startWx, startWy] = screenToWorld(startSx, startSy, cameraRef.current);
+    contourPolyDragRef.current = {
+      type,
+      vertexIdx,
+      startMouseWx: startWx,
+      startMouseWy: startWy,
+      startVerts: contourFillPolygonRef.current.map((v): [number, number] => [...v]),
+    };
+    if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+
+    const handleMove = (e: MouseEvent) => {
+      const canvas = canvasRef.current;
+      if (!canvas || !contourPolyDragRef.current) return;
+      const rect = canvas.getBoundingClientRect();
+      const [wx, wy] = screenToWorld(e.clientX - rect.left, e.clientY - rect.top, cameraRef.current);
+      const ds = contourPolyDragRef.current;
+      const dx = wx - ds.startMouseWx;
+      const dy = wy - ds.startMouseWy;
+
+      let newVerts: [number, number][];
+      if (ds.type === 'vertex' && ds.vertexIdx !== undefined) {
+        newVerts = ds.startVerts.map((v, i): [number, number] =>
+          i === ds.vertexIdx ? [v[0] + dx, v[1] + dy] : [...v],
+        );
+      } else {
+        newVerts = ds.startVerts.map(([x, y]): [number, number] => [x + dx, y + dy]);
+      }
+      setContourFillPolygon(newVerts);
+      requestAnimationFrame(drawRef.current);
+    };
+
+    const handleUp = () => {
+      contourPolyDragRef.current = null;
+      if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+      contourPolyDragCleanupRef.current = null;
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+    contourPolyDragCleanupRef.current = () => {
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+  }, [setContourFillPolygon]);
 
   // ── Command handle drag helper ────────────────────────────────────────────
 
@@ -1985,6 +2100,37 @@ export default function Canvas() {
           return;
         }
 
+        // ── Contour fill polygon interaction ──────────────────────────────
+        if (activeToolRef.current === 'contour-fill') {
+          const verts = contourFillPolygonRef.current;
+          const closed = contourFillClosedRef.current;
+
+          if (closed) {
+            const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+            if (vIdx !== -1) {
+              startContourPolyDrag('vertex', sx, sy, vIdx);
+              return;
+            }
+            const edgeHit = hitTestPolyEdge(sx, sy, verts, cameraRef.current);
+            if (edgeHit) {
+              const newVerts = [...verts];
+              newVerts.splice(edgeHit.edgeIdx + 1, 0, edgeHit.worldPt);
+              setContourFillPolygon(newVerts);
+              startContourPolyDrag('vertex', sx, sy, edgeHit.edgeIdx + 1);
+              return;
+            }
+            const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
+            if (pointInPolygon([wx, wy], verts)) {
+              startContourPolyDrag('polygon', sx, sy);
+              return;
+            }
+          } else {
+            const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
+            setContourFillPolygon([...verts, [wx, wy]]);
+          }
+          return;
+        }
+
         // ── Split-line click ──────────────────────────────────────────────
         if (activeToolRef.current === 'split-line') {
           const hit = splitHoverRef.current;
@@ -2149,6 +2295,7 @@ export default function Canvas() {
       imgEl, startHandleDrag, startCalibScaleDrag, startGroupDrag,
       insertAfterSelection, insertAboveSelection, setActiveTool, placementPhase,
       setAreaFillPolygon, startPolyDrag,
+      setContourFillPolygon, startContourPolyDrag,
       splitLine, joinLines, deleteCommand,
       lineThicknesses, dotSizes,
       setPendingCommentText,
@@ -2186,6 +2333,36 @@ export default function Canvas() {
 
         if (closed && canvasRef.current) {
           // Cursor feedback for editing mode
+          const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+          if (vIdx !== -1) {
+            canvasRef.current.style.cursor = 'grab';
+            setPolyActiveVertIdx(vIdx);
+          } else {
+            const edgeHit = hitTestPolyEdge(sx, sy, verts, cameraRef.current);
+            if (edgeHit) {
+              canvasRef.current.style.cursor = 'copy';
+              setPolyActiveVertIdx(null);
+            } else if (pointInPolygon([wx, wy], verts)) {
+              canvasRef.current.style.cursor = 'move';
+              setPolyActiveVertIdx(null);
+            } else {
+              canvasRef.current.style.cursor = 'crosshair';
+              setPolyActiveVertIdx(null);
+            }
+          }
+        }
+
+        requestAnimationFrame(drawRef.current);
+        return;
+      }
+
+      // ── Contour fill hover / rubber-band ──────────────────────────────────
+      if (activeToolRef.current === 'contour-fill') {
+        polygonCursorRef.current = [wx, wy];
+        const verts = contourFillPolygonRef.current;
+        const closed = contourFillClosedRef.current;
+
+        if (closed && canvasRef.current) {
           const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
           if (vIdx !== -1) {
             canvasRef.current.style.cursor = 'grab';
@@ -2312,6 +2489,17 @@ export default function Canvas() {
       return;
     }
 
+    // ── Contour fill: close polygon ────────────────────────────────────────
+    if (activeToolRef.current === 'contour-fill' && !contourFillClosedRef.current) {
+      const verts = contourFillPolygonRef.current;
+      const trimmed = verts.slice(0, -1);
+      if (trimmed.length >= 3) {
+        setContourFillPolygon(trimmed);
+        setContourFillClosed(true);
+      }
+      return;
+    }
+
     if (isCalibrating) {
       const rect = canvas.getBoundingClientRect();
       const sx = e.clientX - rect.left;
@@ -2329,7 +2517,7 @@ export default function Canvas() {
       }
       return;
     }
-  }, [isCalibrating, calibPixels, setAreaFillPolygon, setAreaFillClosed]);
+  }, [isCalibrating, calibPixels, setAreaFillPolygon, setAreaFillClosed, setContourFillPolygon, setContourFillClosed]);
 
   // ── Drag-drop (file / image) ──────────────────────────────────────────────
 
@@ -2374,6 +2562,20 @@ export default function Canvas() {
         return;
       }
 
+      // Contour fill mode: vertex removal
+      if (activeToolRef.current === 'contour-fill' && contourFillClosedRef.current) {
+        e.preventDefault();
+        const rect = canvasRef.current!.getBoundingClientRect();
+        const sx = e.clientX - rect.left;
+        const sy = e.clientY - rect.top;
+        const verts = contourFillPolygonRef.current;
+        const vIdx = hitTestPolyVertex(sx, sy, verts, cameraRef.current);
+        if (vIdx !== -1 && verts.length > 3) {
+          setContourFillPolygon(verts.filter((_, i) => i !== vIdx));
+        }
+        return;
+      }
+
       // Normal mode: command context menu
       if (isCalibrating || activeToolRef.current) return;
       e.preventDefault();
@@ -2404,7 +2606,7 @@ export default function Canvas() {
       showContextMenuForSelection(e.clientX, e.clientY, cmds);
     },
     [
-      isCalibrating, setAreaFillPolygon,
+      isCalibrating, setAreaFillPolygon, setContourFillPolygon,
       selectOne, selectToggle,
       showContextMenuForSelection, showPasteOnlyMenu,
     ],
@@ -2412,7 +2614,10 @@ export default function Canvas() {
 
   // Cleanup poly drag on unmount
   useEffect(() => {
-    return () => { if (polyDragCleanupRef.current) polyDragCleanupRef.current(); };
+    return () => {
+      if (polyDragCleanupRef.current) polyDragCleanupRef.current();
+      if (contourPolyDragCleanupRef.current) contourPolyDragCleanupRef.current();
+    };
   }, []);
 
   // ── Render ────────────────────────────────────────────────────────────────

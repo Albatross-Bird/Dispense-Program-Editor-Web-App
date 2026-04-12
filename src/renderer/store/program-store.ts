@@ -1044,13 +1044,14 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
     const pattern = program.patterns.find((p) => p.name === selectedPatternName);
     if (!pattern) return;
 
-    const AREA_FILL_PREFIX = '##AREA_FILL_CONFIG:';
+    const AREA_FILL_PREFIX    = '##AREA_FILL_CONFIG:';
+    const CONTOUR_FILL_PREFIX = '##CONTOUR_FILL_CONFIG:';
 
-    /** Shift polygon coords in an area-fill config comment. */
-    function shiftAreaFillComment(cmd: CommentCommand): CommentCommand {
-      if (!cmd.text.startsWith(AREA_FILL_PREFIX)) return cmd;
+    /** Shift polygon coords in a fill config comment (area fill or contour fill). */
+    function shiftFillComment(cmd: CommentCommand, prefix: string): CommentCommand {
+      if (!cmd.text.startsWith(prefix)) return cmd;
       try {
-        const body = cmd.text.slice(AREA_FILL_PREFIX.length);
+        const body = cmd.text.slice(prefix.length);
         const fields: Record<string, string> = {};
         body.split('|').forEach((f) => {
           const eq = f.indexOf('=');
@@ -1068,7 +1069,7 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
         const newBody = Object.entries(fields)
           .map(([k, v]) => `${k}=${v}`)
           .join('|');
-        return { ...cmd, text: `${AREA_FILL_PREFIX}${newBody}` };
+        return { ...cmd, text: `${prefix}${newBody}` };
       } catch {
         return cmd;
       }
@@ -1091,7 +1092,9 @@ export const useProgramStore = create<ProgramStore>((set, get) => ({
         };
       }
       if (cmd.kind === 'Comment') {
-        return shiftAreaFillComment(cmd);
+        const shifted = shiftFillComment(cmd, AREA_FILL_PREFIX);
+        if (shifted !== cmd) return shifted;
+        return shiftFillComment(cmd, CONTOUR_FILL_PREFIX);
       }
       if (cmd.kind === 'Group') {
         return { ...cmd, commands: cmd.commands.map(applyMoveToCmd) };

@@ -31,8 +31,7 @@ function rectPolygon(w: number, h: number): [number, number][] {
 const baseConfig = (overrides?: Partial<ContourFillConfig>): ContourFillConfig => ({
   polygon: square(10),
   spacing: 2,
-  includeBoundary: true,
-  direction: 'inward',
+  start: 'outside',
   fillType: 'lines',
   dotSpacing: 1,
   zHeight: 5,
@@ -42,48 +41,53 @@ const baseConfig = (overrides?: Partial<ContourFillConfig>): ContourFillConfig =
   ...overrides,
 });
 
-// ── 7A: basic layer count ──────────────────────────────────────────────────────
+// ── 7A: first contour is inset by spacing, not on the boundary ─────────────────
 
 describe('generateContourLayers', () => {
-  it('7A: produces the expected number of layers for a 10×10 square at spacing=2', () => {
-    const layers = generateContourLayers(square(10), 2, true);
-    // Expect: boundary + insets at 2, 4 mm → 3 layers; innermost (6 mm) collapses
-    expect(layers.length).toBeGreaterThanOrEqual(2);
-    expect(layers[0].layerIndex).toBe(0);
+  it('7A: first layer is inset from boundary — not the polygon itself', () => {
+    const layers = generateContourLayers(square(10), 2);
+    expect(layers.length).toBeGreaterThan(0);
+    // First layer vertices should NOT exactly match the input polygon
+    const firstVert = layers[0].vertices[0];
+    const exactMatch = square(10).some(([x, y]) => x === firstVert[0] && y === firstVert[1]);
+    expect(exactMatch).toBe(false);
   });
 
   it('7B: layer indices are sequential from 0', () => {
-    const layers = generateContourLayers(square(20), 2, true);
+    const layers = generateContourLayers(square(20), 2);
     for (let i = 0; i < layers.length; i++) {
-      // When includeBoundary=true, layerIndex values go 0,1,2,...
-      expect(layers[i].layerIndex).toBeLessThanOrEqual(i);
+      expect(layers[i].layerIndex).toBe(i);
     }
   });
 
   it('7C: returns empty array for degenerate polygon (< 3 vertices)', () => {
-    const layers = generateContourLayers([[0, 0], [1, 0]], 1, true);
+    const layers = generateContourLayers([[0, 0], [1, 0]], 1);
     expect(layers).toHaveLength(0);
   });
 
   it('7D: returns empty array when spacing <= 0', () => {
-    const layers = generateContourLayers(square(10), 0, true);
+    expect(generateContourLayers(square(10), 0)).toHaveLength(0);
+    expect(generateContourLayers(square(10), -1)).toHaveLength(0);
+  });
+
+  it('7E: spacing between boundary and first contour equals spacing between contours', () => {
+    // For a square(20) with spacing=4, both boundary→layer0 and layer0→layer1
+    // should each be ~4mm inset.
+    const layers = generateContourLayers(square(20), 4);
+    expect(layers.length).toBeGreaterThanOrEqual(2);
+    // layer 0 centroid should be approximately 4mm inside the boundary
+    // (For a square centred at 10,10 with size 20, the inset by 4 gives a
+    //  square centred at 10,10 with size 12, so vertices at 4,4 etc.)
+    const v0 = layers[0].vertices;
+    const minX0 = Math.min(...v0.map(([x]) => x));
+    expect(minX0).toBeGreaterThan(3);
+    expect(minX0).toBeLessThan(5);
+  });
+
+  it('7F: polygon smaller than spacing produces no layers', () => {
+    // 3×3 square, spacing=2 → first inset collapses
+    const layers = generateContourLayers(square(3), 2);
     expect(layers).toHaveLength(0);
-    const layers2 = generateContourLayers(square(10), -1, true);
-    expect(layers2).toHaveLength(0);
-  });
-
-  it('7E: returns only boundary layer when spacing > polygon half-size', () => {
-    // A 4×4 square with spacing 3 → boundary only; first inset collapses
-    const layers = generateContourLayers(square(4), 3, true);
-    // Should have at least the boundary (1 layer)
-    expect(layers.length).toBeGreaterThanOrEqual(1);
-  });
-
-  it('7F: excludes boundary layer when includeBoundary=false', () => {
-    const withBoundary = generateContourLayers(square(10), 2, true);
-    const noBoundary   = generateContourLayers(square(10), 2, false);
-    // noBoundary should have one fewer layer
-    expect(noBoundary.length).toBe(withBoundary.length - 1);
   });
 });
 
@@ -124,11 +128,10 @@ describe('generateContourFillCommands', () => {
     }
   });
 
-  it('7J: outward-inward direction reverses layer order vs inward', () => {
-    const inward     = generateContourFillCommands(baseConfig({ direction: 'inward' }));
-    const outInward  = generateContourFillCommands(baseConfig({ direction: 'outward-inward' }));
-    // Both should produce the same total count
-    expect(inward.length).toBe(outInward.length);
+  it('7J: inside start reverses layer order vs outside — same total count', () => {
+    const outside = generateContourFillCommands(baseConfig({ start: 'outside' }));
+    const inside  = generateContourFillCommands(baseConfig({ start: 'inside' }));
+    expect(outside.length).toBe(inside.length);
   });
 
   it('7K: returns empty array when polygon has < 3 vertices', () => {
@@ -136,10 +139,9 @@ describe('generateContourFillCommands', () => {
     expect(cmds).toHaveLength(0);
   });
 
-  it('7L: non-square rectangle produces correct layer count', () => {
-    const poly = rectPolygon(20, 6);
-    const layers = generateContourLayers(poly, 2, true);
-    // 6mm wide → spacing=2 means we get boundary + 1 inset (at 2mm) only; next collapses
+  it('7L: non-square rectangle produces at least one layer', () => {
+    const poly = rectPolygon(20, 10);
+    const layers = generateContourLayers(poly, 2);
     expect(layers.length).toBeGreaterThanOrEqual(1);
   });
 });

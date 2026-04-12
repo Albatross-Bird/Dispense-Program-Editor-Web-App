@@ -29,8 +29,7 @@ function serializeConfigComment(
   const text = [
     `${CONFIG_PREFIX}polygon=${polyStr}`,
     `spacing=${config.spacing}`,
-    `includeBoundary=${config.includeBoundary}`,
-    `direction=${config.direction}`,
+    `start=${config.start}`,
     `fillType=${config.fillType}`,
     `dotSpacing=${config.dotSpacing}`,
     `zHeight=${config.zHeight}`,
@@ -72,18 +71,22 @@ function parseConfigComment(
       ? raw.slice('Contour Fill - '.length)
       : raw;
 
+    // Handle legacy 'direction' field (inward→outside, outward-inward→inside)
+    const rawStart = fields.start ?? fields.direction ?? 'outside';
+    const start: 'outside' | 'inside' =
+      rawStart === 'inside' || rawStart === 'outward-inward' ? 'inside' : 'outside';
+
     return {
       polygon,
       config: {
-        spacing:         Number(fields.spacing)    || 2,
-        includeBoundary: fields.includeBoundary === 'true',
-        direction:       (fields.direction as 'inward' | 'outward-inward') ?? 'inward',
-        fillType:        (fields.fillType as 'dots' | 'lines') ?? 'lines',
-        dotSpacing:      Number(fields.dotSpacing) || 1,
-        zHeight:         Number(fields.zHeight)    || 0,
-        param:           Number(fields.param)      || 1,
-        flowRate:        Number(fields.flowRate)   || 0.5,
-        name:            parsedName,
+        spacing:    Number(fields.spacing)    || 2,
+        start,
+        fillType:   (fields.fillType as 'dots' | 'lines') ?? 'lines',
+        dotSpacing: Number(fields.dotSpacing) || 1,
+        zHeight:    Number(fields.zHeight)    || 0,
+        param:      Number(fields.param)      || 1,
+        flowRate:   Number(fields.flowRate)   || 0.5,
+        name:       parsedName,
       },
     };
   } catch {
@@ -95,8 +98,7 @@ function parseConfigComment(
 
 interface PanelConfig {
   spacing: number;
-  includeBoundary: boolean;
-  direction: 'inward' | 'outward-inward';
+  start: 'outside' | 'inside';
   fillType: 'dots' | 'lines';
   dotSpacing: number;
   zHeight: number;
@@ -107,8 +109,7 @@ interface PanelConfig {
 
 const DEFAULT_CONFIG: PanelConfig = {
   spacing: 2,
-  includeBoundary: true,
-  direction: 'inward',
+  start: 'outside',
   fillType: 'lines',
   dotSpacing: 1,
   zHeight: 0,
@@ -213,8 +214,7 @@ export default function ContourFillPanel({ anchorRect, onCancel }: ContourFillPa
     const fillConfig: ContourFillConfig = {
       polygon: poly,
       spacing: cfg.spacing,
-      includeBoundary: cfg.includeBoundary,
-      direction: cfg.direction,
+      start: cfg.start,
       fillType: cfg.fillType,
       dotSpacing: cfg.dotSpacing,
       zHeight: cfg.zHeight,
@@ -252,8 +252,7 @@ export default function ContourFillPanel({ anchorRect, onCancel }: ContourFillPa
     const fillConfig: ContourFillConfig = {
       polygon: contourFillPolygon,
       spacing: config.spacing,
-      includeBoundary: config.includeBoundary,
-      direction: config.direction,
+      start: config.start,
       fillType: config.fillType,
       dotSpacing: config.dotSpacing,
       zHeight: config.zHeight,
@@ -412,33 +411,22 @@ export default function ContourFillPanel({ anchorRect, onCancel }: ContourFillPa
           />
         </div>
 
-        {/* Include boundary toggle */}
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input
-            type="checkbox"
-            checked={config.includeBoundary}
-            onChange={(e) => set('includeBoundary', e.target.checked)}
-            className="w-3 h-3 accent-blue-500"
-          />
-          <span className="text-xs text-gray-300">{t('cf.includeBoundary')}</span>
-        </label>
-
-        {/* Direction */}
+        {/* Start */}
         <div>
-          <Label>{t('cf.direction')}</Label>
+          <Label>{t('cf.start')}</Label>
           <div className="flex rounded overflow-hidden border border-gray-600">
-            {(['inward', 'outward-inward'] as const).map((dir) => (
+            {(['outside', 'inside'] as const).map((s) => (
               <button
-                key={dir}
-                onClick={() => set('direction', dir)}
+                key={s}
+                onClick={() => set('start', s)}
                 className={[
                   'flex-1 py-1 text-[10px] transition-colors',
-                  config.direction === dir
+                  config.start === s
                     ? 'bg-blue-600 text-white'
                     : 'bg-gray-700 text-gray-300 hover:bg-gray-600',
                 ].join(' ')}
               >
-                {dir === 'inward' ? t('cf.inward') : t('cf.outwardInward')}
+                {s === 'outside' ? t('cf.outside') : t('cf.inside')}
               </button>
             ))}
           </div>

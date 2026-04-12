@@ -6,6 +6,10 @@
  * Each layer is offset from the PREVIOUS result so concave topologies
  * are handled correctly (e.g. a U-shape splits into two contours at the
  * right depth).
+ *
+ * The first contour is always inset by `spacing` from the polygon boundary,
+ * so there is uniform spacing between the boundary and the outermost contour
+ * as well as between every successive pair of contours.
  */
 import { inflatePathsD, JoinType, EndType } from 'clipper2-ts';
 import type { PatternCommand, LineCommand, DotCommand } from './types';
@@ -21,15 +25,13 @@ function genId(): string {
 export interface ContourFillConfig {
   /** World-space polygon vertices defining the fill boundary. */
   polygon: [number, number][];
-  /** Distance between successive contour layers (mm). */
+  /** Distance between successive contour layers, and from boundary to first contour (mm). */
   spacing: number;
-  /** Whether to include the original polygon boundary as the outermost layer. */
-  includeBoundary: boolean;
   /**
-   * "inward"  — dispense outer contour first, spiralling toward centre.
-   * "outward-inward" — dispense innermost contour first, spiralling outward.
+   * "outside" — dispense outermost contour first, spiralling toward centre.
+   * "inside"  — dispense innermost contour first, spiralling outward.
    */
-  direction: 'inward' | 'outward-inward';
+  start: 'outside' | 'inside';
   /** "lines" = one Line cmd per edge segment; "dots" = dots along perimeter. */
   fillType: 'dots' | 'lines';
   /** Spacing between dots along each contour (only used when fillType = 'dots'). */
@@ -42,7 +44,7 @@ export interface ContourFillConfig {
 
 export interface ContourLayer {
   vertices: [number, number][];
-  /** 0 = outermost (original or first inset). */
+  /** 0 = outermost (first inset from boundary). */
   layerIndex: number;
 }
 
@@ -50,28 +52,25 @@ export interface ContourLayer {
 
 /**
  * Returns an array of contour layers, each one inset further than the last.
- * Layer 0 is either the original polygon (if includeBoundary=true) or the
- * first inset.  Stops when clipper2 returns no more paths.
+ * The first layer is inset by `spacing` from the polygon boundary, so the
+ * gap between the boundary and the outermost contour equals `spacing` — the
+ * same as the gap between every subsequent pair of contours.
+ * Stops when clipper2 returns no more paths.
  */
 export function generateContourLayers(
   polygon: [number, number][],
   spacing: number,
-  includeBoundary: boolean,
 ): ContourLayer[] {
   if (polygon.length < 3 || spacing <= 0) return [];
 
   const layers: ContourLayer[] = [];
-
-  if (includeBoundary) {
-    layers.push({ vertices: [...polygon], layerIndex: 0 });
-  }
 
   // Convert to clipper2-ts PathsD: PathsD = Array<Array<{x,y}>>
   let currentPaths: { x: number; y: number }[][] = [
     polygon.map(([x, y]) => ({ x, y })),
   ];
 
-  let layerIdx = includeBoundary ? 1 : 0;
+  let layerIdx = 0;
 
   for (let iter = 0; iter < 1000; iter++) {
     // Inset by -spacing.  precision=4 is adequate for mm-range coordinates.
@@ -166,11 +165,11 @@ function reorderFromNearest(
 // ── Main export ───────────────────────────────────────────────────────────────
 
 export function generateContourFillCommands(config: ContourFillConfig): PatternCommand[] {
-  const layers = generateContourLayers(config.polygon, config.spacing, config.includeBoundary);
+  const layers = generateContourLayers(config.polygon, config.spacing);
   if (layers.length === 0) return [];
 
   const orderedLayers =
-    config.direction === 'outward-inward' ? [...layers].reverse() : layers;
+    config.start === 'inside' ? [...layers].reverse() : layers;
 
   const commands: PatternCommand[] = [];
   let prevLastPt: [number, number] | null = null;

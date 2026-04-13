@@ -51,10 +51,13 @@ function basename(filePath: string): string {
 
 function FileMenu() {
   const t = useT();
-  const { program, load, save, saveAs } = useProgramStore();
+  const program = useProgramStore((s) => s.program);
+  const load    = useProgramStore((s) => s.load);
+  const save    = useProgramStore((s) => s.save);
+  const saveAs  = useProgramStore((s) => s.saveAs);
   const filePath = useProgramStore((s) => s.filePath);
   const selectedPatternName = useProgramStore((s) => s.selectedPatternName);
-  const { setBackgroundImage } = useUIStore();
+  const setBackgroundImage = useUIStore((s) => s.setBackgroundImage);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -73,8 +76,10 @@ function FileMenu() {
     if (!patternKey) return;
     const result = await window.electronAPI.loadImage();
     if (!result) return;
-    // Always create a fresh object so Canvas re-triggers calibration even for the same file
-    setBackgroundImage(patternKey, { filePath: result.filePath, dataUrl: `data:${result.mime};base64,${result.data}` });
+    // Always create a fresh object so Canvas re-triggers calibration even for the same file.
+    // Use createObjectURL (no base64 overhead) for fast loading.
+    const dataUrl = URL.createObjectURL(new Blob([result.buffer], { type: result.mime }));
+    setBackgroundImage(patternKey, { filePath: result.filePath, dataUrl });
   }, [setBackgroundImage, patternKey]);
 
   const item = (label: string, action: () => void, disabled = false) => (
@@ -637,6 +642,14 @@ function CommandPane() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [collapseAllTrigger, setExpandedGroups]);
 
+  // Keep ui-store in sync so ContextMenu can check whether any groups are expanded.
+  // Use a primitive boolean so the effect only fires on actual expand/collapse transitions,
+  // not on every render (expandedGroups gets a new Set reference from ?? new Set() each render).
+  const anyGroupsExpanded = expandedGroups.size > 0;
+  useEffect(() => {
+    useUIStore.getState().setHasExpandedGroups(anyGroupsExpanded);
+  }, [anyGroupsExpanded]);
+
   if (!program) {
     return (
       <div className="flex-1 flex items-center justify-center text-gray-600 text-sm">
@@ -1177,7 +1190,10 @@ function DiscardPlainTextDialog({
 function StatusBar() {
   const t = useT();
   const { program, isDirty } = useProgramStore();
-  const { zoomLevel, cursorCoords, splitRatio, triggerFitToView } = useUIStore();
+  const zoomLevel       = useUIStore((s) => s.zoomLevel);
+  const cursorCoords    = useUIStore((s) => s.cursorCoords);
+  const splitRatio      = useUIStore((s) => s.splitRatio);
+  const triggerFitToView = useUIStore((s) => s.triggerFitToView);
 
   // Mirror the main split: canvas% + ToolPanel (40px) + drag handle (4px)
   const leftWidth = `calc(${splitRatio * 100}% + 44px)`;
@@ -1243,7 +1259,9 @@ function SaveErrorToast() {
 
 export default function App() {
   const { filePath, save } = useProgramStore();
-  const { splitRatio, setSplitRatio, historyPanelOpen } = useUIStore();
+  const splitRatio      = useUIStore((s) => s.splitRatio);
+  const setSplitRatio   = useUIStore((s) => s.setSplitRatio);
+  const historyPanelOpen = useUIStore((s) => s.historyPanelOpen);
   const { init: initSettings, addRecentFile } = useSettingsStore();
   const { init: initCalibrations } = useCalibrationStore();
 
@@ -1296,6 +1314,14 @@ export default function App() {
         }
         if (e.key === 'Delete' || e.key === 'Backspace') {
           useProgramStore.getState().deleteSelection();
+          return;
+        }
+        if (e.key === 'Escape') {
+          const { activeTool, contextMenu, renamingGroupId } = useUIStore.getState();
+          const { selectedCommandIds } = useProgramStore.getState();
+          if (!activeTool && !contextMenu && !renamingGroupId && selectedCommandIds.size > 0) {
+            useProgramStore.getState().clearSelection();
+          }
           return;
         }
       }

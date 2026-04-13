@@ -1,6 +1,9 @@
 /**
  * Vertical tool panel — sits between the canvas and the command pane.
  * Fixed 40px width, icon buttons stacked top-to-bottom.
+ *
+ * Tools that share a slot show a small triangle in the bottom-right corner.
+ * Clicking the triangle opens a horizontal flyout extending leftward.
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useProgramStore, genId } from '../store/program-store';
@@ -44,25 +47,28 @@ function NewCommentIcon() {
   );
 }
 
-function MergeEndStartIcon() {
+/** Diamond (junction) with a right-pointing arrow — Merge Forward. */
+function MergeForwardIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      {/* Two lines converging to a point, then arrow continuing right */}
-      <polyline points="1,4 8,8.5 1,13" />
-      <line x1="8" y1="8.5" x2="16" y2="8.5" />
-      <polyline points="13,6 16,8.5 13,11" />
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" strokeLinecap="round" strokeLinejoin="round">
+      {/* Amber diamond — matches the junction handle color on the canvas */}
+      <polygon points="8.5,1.5 15.5,8.5 8.5,15.5 1.5,8.5" stroke="#fbbf24" strokeWidth="1.5" />
+      {/* Right-pointing arrow */}
+      <line x1="4" y1="8.5" x2="10" y2="8.5" stroke="currentColor" strokeWidth="1.5" />
+      <polyline points="10,7 12,8.5 10,10" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
 }
 
-function MergeStartEndIcon() {
+/** Diamond (junction) with a left-pointing arrow — Merge Backward. */
+function MergeBackwardIcon() {
   return (
-    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-      {/* Arrow from left, then two lines diverging */}
-      <line x1="1" y1="8.5" x2="9" y2="8.5" />
-      <polyline points="4,6 1,8.5 4,11" />
-      <polyline points="9,8.5 16,4" />
-      <polyline points="9,8.5 16,13" />
+    <svg width="17" height="17" viewBox="0 0 17 17" fill="none" strokeLinecap="round" strokeLinejoin="round">
+      {/* Amber diamond — matches the junction handle color on the canvas */}
+      <polygon points="8.5,1.5 15.5,8.5 8.5,15.5 1.5,8.5" stroke="#fbbf24" strokeWidth="1.5" />
+      {/* Left-pointing arrow */}
+      <line x1="13" y1="8.5" x2="7" y2="8.5" stroke="currentColor" strokeWidth="1.5" />
+      <polyline points="7,7 5,8.5 7,10" stroke="currentColor" strokeWidth="1.5" />
     </svg>
   );
 }
@@ -187,13 +193,10 @@ function ParamSelector({ activeParam, setActiveParam }: ParamSelectorProps) {
   const color = valveColor(activeParam);
 
   return (
-    <div
-      ref={containerRef}
-      className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50"
-    >
+    <div ref={containerRef} className="relative">
       <button
         onClick={(e) => { e.stopPropagation(); setOpen((v) => !v); }}
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap transition-opacity"
+        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold whitespace-nowrap transition-opacity w-full"
         style={{
           color,
           background: 'rgba(15,20,30,0.92)',
@@ -204,7 +207,7 @@ function ParamSelector({ activeParam, setActiveParam }: ParamSelectorProps) {
         P{activeParam}
       </button>
       {open && (
-        <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-gray-700 rounded shadow-2xl py-0.5 min-w-[90px]">
+        <div className="absolute right-0 top-full mt-1 bg-gray-900 border border-gray-700 rounded shadow-2xl py-0.5 min-w-[90px] z-50">
           {Array.from({ length: 10 }, (_, i) => i + 1).map((n) => (
             <button
               key={n}
@@ -297,21 +300,19 @@ function CommentToolPrompt({ value, onChange, onPlace, onCancel }: CommentToolPr
 function ChainModeCheckbox({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
   const t = useT();
   return (
-    <div className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50">
-      <label
-        className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap cursor-pointer select-none"
-        style={{ background: 'rgba(15,20,30,0.92)', border: '1px solid #ffffff22', color: checked ? '#93c5fd' : '#9ca3af' }}
-        title={t('chain.tooltip')}
-      >
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          className="w-2.5 h-2.5 accent-blue-500"
-        />
-        {t('chain.label')}
-      </label>
-    </div>
+    <label
+      className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap cursor-pointer select-none w-full"
+      style={{ background: 'rgba(15,20,30,0.92)', border: '1px solid #ffffff22', color: checked ? '#93c5fd' : '#9ca3af' }}
+      title={t('chain.tooltip')}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="w-2.5 h-2.5 accent-blue-500"
+      />
+      {t('chain.label')}
+    </label>
   );
 }
 
@@ -323,22 +324,27 @@ interface ToolButtonProps {
   onClick?: () => void;
   disabled?: boolean;
   active?: boolean;
+  /** When provided and active, use this color for border/icon/background instead of blue. */
+  activeColor?: string;
 }
 
-function ToolButton({ icon, label, onClick, disabled = false, active = false }: ToolButtonProps) {
+function ToolButton({ icon, label, onClick, disabled = false, active = false, activeColor }: ToolButtonProps) {
+  const useCustomColor = active && !!activeColor;
   return (
     <div className="relative group">
       <button
         onClick={disabled ? undefined : onClick}
         className={[
-          'w-10 h-10 flex items-center justify-center transition-colors text-gray-300',
-          'border-l-2',
-          active
-            ? 'bg-blue-600/30 border-blue-400 text-blue-200'
-            : disabled
-            ? 'border-transparent opacity-30 cursor-default'
-            : 'border-transparent hover:bg-gray-600/60 hover:text-gray-100 cursor-pointer',
+          'w-10 h-10 flex items-center justify-center transition-colors relative border-l-2',
+          active && !useCustomColor ? 'bg-blue-600/30 border-blue-400 text-blue-200' : '',
+          !active && disabled ? 'border-transparent opacity-30 cursor-default text-gray-300' : '',
+          !active && !disabled ? 'border-transparent hover:bg-gray-600/60 hover:text-gray-100 cursor-pointer text-gray-300' : '',
         ].join(' ')}
+        style={useCustomColor ? {
+          background: `${activeColor}20`,
+          borderLeftColor: activeColor,
+          color: activeColor,
+        } : undefined}
         tabIndex={-1}
       >
         {icon}
@@ -349,6 +355,160 @@ function ToolButton({ icon, label, onClick, disabled = false, active = false }: 
       >
         {label}
       </div>
+    </div>
+  );
+}
+
+// ── Tool Group Slot ────────────────────────────────────────────────────────────
+// A slot that holds multiple tools. Shows the current tool's icon with a small
+// triangle indicator in the bottom-right corner. Clicking the triangle opens a
+// horizontal flyout extending leftward showing all tools in the group.
+
+interface SlotItem {
+  key: string;
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}
+
+function ToolGroupSlot({
+  items,
+  disabled = false,
+  onFlyoutChange,
+  activeColor,
+}: {
+  items: SlotItem[];
+  disabled?: boolean;
+  onFlyoutChange?: (open: boolean) => void;
+  /** When provided and any item is active, use this color for the border/icon/background instead of blue. */
+  activeColor?: string;
+}) {
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const [flyoutOpen, setFlyoutOpen] = useState(false);
+
+  const setFlyout = (open: boolean) => {
+    setFlyoutOpen(open);
+    onFlyoutChange?.(open);
+  };
+  const slotRef = useRef<HTMLDivElement>(null);
+
+  // Close flyout on outside click
+  useEffect(() => {
+    if (!flyoutOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (slotRef.current && !slotRef.current.contains(e.target as Node)) {
+        setFlyout(false);
+      }
+    };
+    window.addEventListener('mousedown', handler, true);
+    return () => window.removeEventListener('mousedown', handler, true);
+  }, [flyoutOpen]);
+
+  // Close flyout on Escape
+  useEffect(() => {
+    if (!flyoutOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setFlyout(false);
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [flyoutOpen]);
+
+  // Active item wins; otherwise fall back to the last-selected index
+  const activeIdx = items.findIndex((item) => item.active);
+  const displayIdx = activeIdx >= 0 ? activeIdx : selectedIdx;
+  const displayItem = items[displayIdx];
+  const isAnyActive = activeIdx >= 0;
+
+  const handleMainClick = () => {
+    if (disabled) return;
+    displayItem.onClick();
+    setSelectedIdx(displayIdx);
+  };
+
+  const handleTriangleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (disabled) return;
+    setFlyout(!flyoutOpen);
+  };
+
+  const handleFlyoutItem = (item: SlotItem, idx: number) => {
+    setSelectedIdx(idx);
+    setFlyout(false);
+    item.onClick();
+  };
+
+  return (
+    <div ref={slotRef} className="relative group">
+      {/* Main button */}
+      <button
+        onClick={handleMainClick}
+        className={[
+          'w-10 h-10 flex items-center justify-center transition-colors relative border-l-2',
+          isAnyActive && !activeColor ? 'bg-blue-600/30 border-blue-400 text-blue-200' : '',
+          !isAnyActive && disabled ? 'border-transparent opacity-30 cursor-default text-gray-300' : '',
+          !isAnyActive && !disabled ? 'border-transparent hover:bg-gray-600/60 hover:text-gray-100 cursor-pointer text-gray-300' : '',
+        ].join(' ')}
+        style={isAnyActive && activeColor ? {
+          background: `${activeColor}20`,
+          borderLeftColor: activeColor,
+          color: activeColor,
+        } : undefined}
+        tabIndex={-1}
+      >
+        {displayItem.icon}
+        {/* Bottom-right triangle indicator — always visible, dimmed when disabled */}
+        <span
+          className="absolute bottom-1 right-1 pointer-events-none"
+          style={{
+            width: 0,
+            height: 0,
+            borderStyle: 'solid',
+            borderWidth: '0 0 5px 5px',
+            borderColor: `transparent transparent rgba(156,163,175,${disabled ? 0.2 : 0.45}) transparent`,
+          }}
+        />
+      </button>
+
+      {/* Transparent hit area covering the triangle corner */}
+      {!disabled && (
+        <div
+          className="absolute bottom-0 right-0 w-4 h-4 z-10 cursor-pointer"
+          onClick={handleTriangleClick}
+        />
+      )}
+
+      {/* Tooltip (appears to the right, same as ToolButton) */}
+      <div className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 bg-gray-900 border border-gray-600 text-xs text-gray-200 rounded whitespace-nowrap z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-100 delay-500">
+        {displayItem.label}
+      </div>
+
+      {/* Flyout: horizontal row extending leftward from the toolbar.
+          flex-row-reverse places items[0] (primary) closest to the toolbar. */}
+      {flyoutOpen && (
+        <div className="absolute right-full top-0 mr-1 flex flex-row-reverse bg-gray-900 border border-gray-700 rounded-md shadow-2xl p-1 z-50">
+          {items.map((item, idx) => (
+            <button
+              key={item.key}
+              onClick={() => { if (!item.disabled) handleFlyoutItem(item, idx); }}
+              title={item.label}
+              className={[
+                'w-9 h-9 flex items-center justify-center rounded transition-colors',
+                item.disabled
+                  ? 'opacity-30 cursor-default text-gray-500'
+                  : 'hover:bg-gray-700 cursor-pointer',
+                idx === displayIdx && !item.disabled
+                  ? 'text-blue-300'
+                  : item.disabled ? '' : 'text-gray-300',
+              ].join(' ')}
+            >
+              {item.icon}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -426,7 +586,6 @@ export default function ToolPanel() {
   const deleteSelection     = useProgramStore((s) => s.deleteSelection);
 
   const activeTool             = useUIStore((s) => s.activeTool);
-  // split-line and join-lines are canvas-driven; toolbar just activates them
   const setActiveTool          = useUIStore((s) => s.setActiveTool);
   const clearAreaFill              = useUIStore((s) => s.clearAreaFill);
   const setAreaFillEditGroupId     = useUIStore((s) => s.setAreaFillEditGroupId);
@@ -444,6 +603,7 @@ export default function ToolPanel() {
   const anchorRect   = useAnchorRect(toolPanelRef as React.RefObject<HTMLElement>);
 
   const [groupPromptOpen, setGroupPromptOpen] = useState(false);
+  const [lineDotFlyoutOpen, setLineDotFlyoutOpen] = useState(false);
 
   // ── Selection-derived enable flags ──────────────────────────────────────────
 
@@ -458,7 +618,6 @@ export default function ToolPanel() {
       if (!pattern) return { selectedLineCount: 0, hasConnectedPair: false, hasSelectedGroup: false, selectedGroup: null };
       const patternCmds = pattern.commands;
 
-      // Collect selected Lines in document order
       function collectLines(cmds: typeof patternCmds): import('@lib/types').LineCommand[] {
         const r: import('@lib/types').LineCommand[] = [];
         for (const c of cmds) {
@@ -496,8 +655,6 @@ export default function ToolPanel() {
   const canDisconnect = canEdit && hasConnectedPair;
   const canGroup      = canEdit && selectedCommandIds.size > 0;
   const canUngroup    = canEdit && hasSelectedGroup;
-  // split-line and join-lines are always available when a pattern is open;
-  // the canvas handles the "nothing to click" case gracefully
   const canSplitJoin  = canEdit;
 
   // ── Handlers ────────────────────────────────────────────────────────────────
@@ -530,7 +687,7 @@ export default function ToolPanel() {
   const handlePlaceComment = useCallback((text: string) => {
     const newCmd = { kind: 'Comment' as const, id: genId(), text };
     insertAboveSelection(newCmd, 'Add comment');
-    setPendingCommentText(''); // clear for next placement, keep tool active
+    setPendingCommentText('');
   }, [insertAboveSelection, setPendingCommentText]);
 
   // Close group prompt on Escape
@@ -551,38 +708,52 @@ export default function ToolPanel() {
       className="flex flex-col items-center py-1 bg-gray-750 border-x border-gray-700 shrink-0 overflow-visible"
       style={{ width: 40, background: '#1e2433' }}
     >
+      {/* ── Line / Dot group slot ── */}
       <div className="relative">
-        <ToolButton
-          icon={<NewLineIcon />}
-          label={t('tool.newLine')}
-          active={activeTool === 'new-line'}
+        <ToolGroupSlot
           disabled={!canEdit}
-          onClick={() => toggleTool('new-line')}
+          onFlyoutChange={setLineDotFlyoutOpen}
+          activeColor={valveColor(activeParam)}
+          items={[
+            {
+              key: 'new-line',
+              icon: <NewLineIcon />,
+              label: t('tool.newLine'),
+              active: activeTool === 'new-line',
+              disabled: !canEdit,
+              onClick: () => toggleTool('new-line'),
+            },
+            {
+              key: 'new-dot',
+              icon: <NewDotIcon />,
+              label: t('tool.newDot'),
+              active: activeTool === 'new-dot',
+              disabled: !canEdit,
+              onClick: () => toggleTool('new-dot'),
+            },
+          ]}
         />
-        {activeTool === 'new-line' && (
-          <>
-            <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+        {/* Accessories appear to the left while the tool is active, but hide when the flyout is open */}
+        {activeTool === 'new-line' && !lineDotFlyoutOpen && (
+          <div className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50 flex flex-col gap-1">
             <ChainModeCheckbox checked={chainMode} onChange={setChainMode} />
-          </>
+            <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+          </div>
+        )}
+        {activeTool === 'new-dot' && !lineDotFlyoutOpen && (
+          <div className="absolute right-full top-1/2 -translate-y-1/2 mr-1.5 z-50">
+            <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
+          </div>
         )}
       </div>
-      <div className="relative">
-        <ToolButton
-          icon={<NewDotIcon />}
-          label={t('tool.newDot')}
-          active={activeTool === 'new-dot'}
-          disabled={!canEdit}
-          onClick={() => toggleTool('new-dot')}
-        />
-        {activeTool === 'new-dot' && (
-          <ParamSelector activeParam={activeParam} setActiveParam={setActiveParam} />
-        )}
-      </div>
+
+      {/* ── Comment (standalone) ── */}
       <div className="relative">
         <ToolButton
           icon={<NewCommentIcon />}
           label={t('tool.newComment')}
           active={activeTool === 'new-comment'}
+          activeColor="#22c55e"
           disabled={!canEdit}
           onClick={() => toggleTool('new-comment')}
         />
@@ -598,18 +769,27 @@ export default function ToolPanel() {
 
       <Divider />
 
-      <ToolButton
-        icon={<MergeEndStartIcon />}
-        label={t('tool.mergeES')}
+      {/* ── Merge ES / Merge SE group slot ── */}
+      <ToolGroupSlot
         disabled={!canMerge}
-        onClick={mergeEndToStart}
+        items={[
+          {
+            key: 'merge-es',
+            icon: <MergeForwardIcon />,
+            label: t('tool.mergeES'),
+            disabled: !canMerge,
+            onClick: mergeEndToStart,
+          },
+          {
+            key: 'merge-se',
+            icon: <MergeBackwardIcon />,
+            label: t('tool.mergeSE'),
+            disabled: !canMerge,
+            onClick: mergeStartToEnd,
+          },
+        ]}
       />
-      <ToolButton
-        icon={<MergeStartEndIcon />}
-        label={t('tool.mergeSE')}
-        disabled={!canMerge}
-        onClick={mergeStartToEnd}
-      />
+
       <ToolButton
         icon={<DisconnectIcon />}
         label={t('tool.disconnect')}
@@ -633,24 +813,32 @@ export default function ToolPanel() {
 
       <Divider />
 
-      <ToolButton
-        icon={<AreaFillIcon />}
-        label={t('tool.areaFill')}
-        active={activeTool === 'area-fill'}
+      {/* ── Area Fill / Contour Fill group slot ── */}
+      <ToolGroupSlot
         disabled={!canEdit}
-        onClick={() => toggleTool('area-fill')}
-      />
-      <ToolButton
-        icon={<ContourFillIcon />}
-        label={t('tool.contourFill')}
-        active={activeTool === 'contour-fill'}
-        disabled={!canEdit}
-        onClick={() => toggleTool('contour-fill')}
+        items={[
+          {
+            key: 'area-fill',
+            icon: <AreaFillIcon />,
+            label: t('tool.areaFill'),
+            active: activeTool === 'area-fill',
+            disabled: !canEdit,
+            onClick: () => toggleTool('area-fill'),
+          },
+          {
+            key: 'contour-fill',
+            icon: <ContourFillIcon />,
+            label: t('tool.contourFill'),
+            active: activeTool === 'contour-fill',
+            disabled: !canEdit,
+            onClick: () => toggleTool('contour-fill'),
+          },
+        ]}
       />
 
       <Divider />
 
-      {/* Group button — has inline prompt */}
+      {/* ── Group (with inline prompt) ── */}
       <div className="relative">
         <ToolButton
           icon={<GroupIcon />}
@@ -675,7 +863,7 @@ export default function ToolPanel() {
 
       <Divider />
 
-      {/* Delete: Mode 1 (immediate) if selection exists; Mode 2 (click-to-delete) otherwise */}
+      {/* ── Delete ── */}
       <ToolButton
         icon={<TrashIcon />}
         label={

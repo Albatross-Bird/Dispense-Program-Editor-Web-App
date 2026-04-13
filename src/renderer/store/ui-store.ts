@@ -6,6 +6,7 @@ import type { CalibPoint } from '@lib/affine';
 const SPLIT_KEY = 'splitRatio';
 
 function getInitialSplit(): number {
+  if (typeof localStorage === 'undefined') return 0.5;
   const stored = localStorage.getItem(SPLIT_KEY);
   if (stored) {
     const v = parseFloat(stored);
@@ -146,6 +147,11 @@ interface UIStore {
   pendingBgImages: Record<string, { filePath: string; points: CalibPoint[] }>;
   setPendingBgImage: (key: string, data: { filePath: string; points: CalibPoint[] } | null) => void;
 
+  // ── Expanded group tracking (current pattern) ────────────────────────────────
+  /** True when at least one group is currently expanded in the visible pattern. */
+  hasExpandedGroups: boolean;
+  setHasExpandedGroups: (value: boolean) => void;
+
   // ── Plain text mode ──────────────────────────────────────────────────────────
   plainTextMode: boolean;
   setPlainTextMode: (v: boolean) => void;
@@ -244,6 +250,9 @@ export const useUIStore = create<UIStore>((set, get) => ({
   setChainMode: (chainMode: boolean) => set({ chainMode }),
   pendingCommentText: '',
   setPendingCommentText: (pendingCommentText: string) => set({ pendingCommentText }),
+
+  hasExpandedGroups: false,
+  setHasExpandedGroups: (hasExpandedGroups: boolean) => set({ hasExpandedGroups }),
 
   plainTextMode: false,
   setPlainTextMode: (plainTextMode: boolean) => set({ plainTextMode }),

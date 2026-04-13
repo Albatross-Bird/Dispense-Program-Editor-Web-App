@@ -50,6 +50,11 @@ function hasAnyGroup(commands: PatternCommand[]): boolean {
   return commands.some((c) => c.kind === 'Group');
 }
 
+/** Returns true if any group (at any nesting depth) is not collapsed. */
+function hasAnyExpandedGroup(): boolean {
+  return useUIStore.getState().hasExpandedGroups;
+}
+
 function findSingleGroup(
   commands: PatternCommand[],
   ids: Set<string>,
@@ -383,19 +388,22 @@ export function useCommandContextMenu() {
         });
       }
 
-      // Expand / Collapse all groups — shown whenever any group exists in the pattern
+      // Expand / Collapse all groups — only shown when groups exist
       if (hasAnyGroup(commands)) {
+        const anyExpanded = hasAnyExpandedGroup();
         items.push({ separator: true });
         items.push({
           label: 'Expand All Groups',
           icon: 'expand-all',
           action: () => { useUIStore.getState().triggerExpandAll(); hideContextMenu(); },
         });
-        items.push({
-          label: 'Collapse All Groups',
-          icon: 'collapse-all',
-          action: () => { useUIStore.getState().triggerCollapseAll(); hideContextMenu(); },
-        });
+        if (anyExpanded) {
+          items.push({
+            label: 'Collapse All Groups',
+            icon: 'collapse-all',
+            action: () => { useUIStore.getState().triggerCollapseAll(); hideContextMenu(); },
+          });
+        }
       }
 
       showContextMenu({ x, y, items });

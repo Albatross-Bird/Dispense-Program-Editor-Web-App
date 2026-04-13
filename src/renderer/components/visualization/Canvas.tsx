@@ -24,6 +24,38 @@ import { useCommandContextMenu } from '../ContextMenu';
 
 // ── Background image processing ───────────────────────────────────────────────
 
+/** Max pixels on the longest side for each quality tier. */
+const THUMBNAIL_PX = 512;
+const WORKING_PX   = 2048;
+
+/**
+ * Raw (unfiltered) downscaled versions of a background image.
+ * origW/origH are the original file dimensions, used for calibration geometry.
+ */
+interface RawCachedImg {
+  rawThumbnail: HTMLCanvasElement;   // ≤ THUMBNAIL_PX on longest side
+  rawWorking:   HTMLCanvasElement | null; // ≤ WORKING_PX on longest side; null while loading
+  origW:        number;
+  origH:        number;
+}
+
+/** Downscale src so the longest side is ≤ maxPx. Returns a new HTMLCanvasElement. */
+function downscaleToCanvas(
+  src: HTMLImageElement | HTMLCanvasElement,
+  maxPx: number,
+): HTMLCanvasElement {
+  const w = 'naturalWidth'  in src ? src.naturalWidth  : src.width;
+  const h = 'naturalHeight' in src ? src.naturalHeight : src.height;
+  const scale = Math.min(1, maxPx / Math.max(w, h, 1));
+  const dw = Math.max(1, Math.round(w * scale));
+  const dh = Math.max(1, Math.round(h * scale));
+  const out = document.createElement('canvas');
+  out.width  = dw;
+  out.height = dh;
+  out.getContext('2d')!.drawImage(src, 0, 0, dw, dh);
+  return out;
+}
+
 function isDefaultBgSettings(s: BgImageSettings): boolean {
   return (
     !s.grayscale &&
@@ -36,36 +68,34 @@ function isDefaultBgSettings(s: BgImageSettings): boolean {
 }
 
 /**
- * Apply the filter pipeline to an image, returning a processed HTMLCanvasElement
- * at the original image dimensions (so calibration geometry is unaffected).
- *
- * Pipeline: scale → CSS filters (grayscale / brightness / contrast / blur) →
- *           optional threshold pixel pass → upscale back to original size.
+ * Apply the filter pipeline to a (pre-downscaled) canvas, returning a new
+ * HTMLCanvasElement at resolutionScale% of the input size.
+ * The upscale step is intentionally omitted — callers pass origW/origH to
+ * drawCalibratedImage / drawUncalibratedImage for correct display scaling.
  */
-function processImage(img: HTMLImageElement, s: BgImageSettings): HTMLCanvasElement {
+function processImage(src: HTMLCanvasElement, s: BgImageSettings): HTMLCanvasElement {
   const scale = Math.max(0.1, Math.min(1, s.resolutionScale / 100));
-  const sw = Math.max(1, Math.round(img.width * scale));
-  const sh = Math.max(1, Math.round(img.height * scale));
+  const sw = Math.max(1, Math.round(src.width * scale));
+  const sh = Math.max(1, Math.round(src.height * scale));
 
-  // ── Scaled + filtered canvas ──────────────────────────────────────────────
-  const scaledCanvas = document.createElement('canvas');
-  scaledCanvas.width = sw;
-  scaledCanvas.height = sh;
-  const scaledCtx = scaledCanvas.getContext('2d')!;
+  const out = document.createElement('canvas');
+  out.width  = sw;
+  out.height = sh;
+  const ctx = out.getContext('2d')!;
 
   const filters: string[] = [];
-  if (s.grayscale)      filters.push('grayscale(1)');
+  if (s.grayscale)        filters.push('grayscale(1)');
   if (s.brightness !== 0) filters.push(`brightness(${((s.brightness + 100) / 100).toFixed(3)})`);
   if (s.contrast !== 0)   filters.push(`contrast(${((s.contrast + 100) / 100).toFixed(3)})`);
   if (s.smoothing > 0)    filters.push(`blur(${(s.smoothing * 0.5).toFixed(1)}px)`);
 
-  if (filters.length > 0) scaledCtx.filter = filters.join(' ');
-  scaledCtx.drawImage(img, 0, 0, sw, sh);
-  scaledCtx.filter = 'none';
+  if (filters.length > 0) ctx.filter = filters.join(' ');
+  ctx.drawImage(src, 0, 0, sw, sh);
+  ctx.filter = 'none';
 
   // ── Threshold pixel pass ──────────────────────────────────────────────────
   if (s.threshold) {
-    const id = scaledCtx.getImageData(0, 0, sw, sh);
+    const id = ctx.getImageData(0, 0, sw, sh);
     const { data } = id;
     const thresh = s.thresholdValue;
     for (let i = 0; i < data.length; i += 4) {
@@ -73,46 +103,88 @@ function processImage(img: HTMLImageElement, s: BgImageSettings): HTMLCanvasElem
       const v = lum >= thresh ? 255 : 0;
       data[i] = data[i + 1] = data[i + 2] = v;
     }
-    scaledCtx.putImageData(id, 0, 0);
+    ctx.putImageData(id, 0, 0);
   }
 
-  // ── Upscale back to original dimensions ───────────────────────────────────
-  const out = document.createElement('canvas');
-  out.width  = img.width;
-  out.height = img.height;
-  const outCtx = out.getContext('2d')!;
-  outCtx.imageSmoothingEnabled = false; // pixelated look for resolution reduction
-  outCtx.drawImage(scaledCanvas, 0, 0, img.width, img.height);
   return out;
 }
 
+/** Idle scheduler with setTimeout fallback for environments without requestIdleCallback. */
+const scheduleIdle: (fn: () => void) => void =
+  typeof requestIdleCallback !== 'undefined'
+    ? (fn) => requestIdleCallback(fn)
+    : (fn) => setTimeout(fn, 0);
+
 // ── Canvas rendering ──────────────────────────────────────────────────────────
 
-function drawUncalibratedImage(ctx: CanvasRenderingContext2D, img: HTMLImageElement | HTMLCanvasElement, cam: Camera) {
-  const [sx, sy] = worldToScreen(0, 0, cam);
+/**
+ * Draw the background image before calibration (world origin = image top-left).
+ * Viewport culling: only transfers the visible portion of the image to the GPU.
+ * origW/origH are the full source image dimensions; canvas may be downscaled.
+ */
+function drawUncalibratedImage(
+  ctx: CanvasRenderingContext2D,
+  canvas: HTMLCanvasElement,
+  cam: Camera,
+  origW: number,
+  origH: number,
+  viewW: number,
+  viewH: number,
+) {
+  // Visible viewport in world space
+  const [wLeft, wTop]     = screenToWorld(0,    0,    cam);
+  const [wRight, wBottom] = screenToWorld(viewW, viewH, cam);
+
+  // Clamp to image world bounds
+  const clipL = Math.max(0,     wLeft);
+  const clipT = Math.max(0,     wTop);
+  const clipR = Math.min(origW, wRight);
+  const clipB = Math.min(origH, wBottom);
+  if (clipR <= clipL || clipB <= clipT) return;
+
+  // Map clipped world region → source canvas pixels
+  const scaleX = canvas.width  / origW;
+  const scaleY = canvas.height / origH;
+  const srcX = clipL * scaleX;
+  const srcY = clipT * scaleY;
+  const srcW = (clipR - clipL) * scaleX;
+  const srcH = (clipB - clipT) * scaleY;
+
+  // Map clipped world region → screen pixels
+  const [dstX, dstY] = worldToScreen(clipL, clipT, cam);
+  const dstW = (clipR - clipL) * cam.zoom;
+  const dstH = (clipB - clipT) * cam.zoom;
+
   ctx.save();
   ctx.globalAlpha = 0.85;
-  ctx.drawImage(img, sx, sy, img.width * cam.zoom, img.height * cam.zoom);
+  ctx.drawImage(canvas, srcX, srcY, srcW, srcH, dstX, dstY, dstW, dstH);
   ctx.restore();
 }
 
+/**
+ * Draw the calibrated background image using the affine transform.
+ * displayScale compensates for the canvas being smaller than the original image
+ * (origW / canvas.width), so calibration geometry remains correct.
+ */
 function drawCalibratedImage(
   ctx: CanvasRenderingContext2D,
-  img: HTMLImageElement | HTMLCanvasElement,
+  canvas: HTMLCanvasElement,
   t: AffineTransform,
   cam: Camera,
+  origW: number,
 ) {
+  const displayScale = origW / canvas.width;
   ctx.save();
   ctx.setTransform(
-    cam.zoom * t.a,              // a
-    cam.zoom * t.b,              // b
-    -cam.zoom * t.b,             // c
-    cam.zoom * t.a,              // d
-    cam.zoom * t.tx + cam.panX,  // e
-    cam.zoom * t.ty + cam.panY,  // f
+    cam.zoom * t.a * displayScale,   // a
+    cam.zoom * t.b * displayScale,   // b
+    -cam.zoom * t.b * displayScale,  // c
+    cam.zoom * t.a * displayScale,   // d
+    cam.zoom * t.tx + cam.panX,      // e
+    cam.zoom * t.ty + cam.panY,      // f
   );
   ctx.globalAlpha = 0.6;
-  ctx.drawImage(img, 0, 0);
+  ctx.drawImage(canvas, 0, 0);
   ctx.restore();
 }
 
@@ -121,15 +193,15 @@ function drawCalibratedImage(
  * `scales` stores world-unit radii — multiplied by cam.zoom to get screen pixels
  * so the symbol scales naturally with zoom (larger when zoomed in).
  */
-const CALIB_HANDLE_OFFSET_PX = 8; // screen px beyond circle edge for scale handles
-const CALIB_HANDLE_SIZE_PX   = 5;
+const CALIB_HANDLE_OFFSET_PX   = 8;  // screen px beyond circle edge for scale handles
+const CALIB_HANDLE_SIZE_PX     = 5;
+const CALIB_DEFAULT_RADIUS_PX  = 40; // target screen-px radius for a freshly placed crosshair
 
 function drawCalibPoints(
   ctx: CanvasRenderingContext2D,
   pixels: ([number, number] | null)[],
   cam: Camera,
   scales: number[],
-  scalingIdx: number | null,
   activeIdx: number | null,
 ) {
   for (let i = 0; i < pixels.length; i++) {
@@ -139,7 +211,6 @@ function drawCalibPoints(
     // World-space radius → screen pixels; clamp so it stays visible even when tiny
     const r = Math.max(6, (scales[i] ?? 10) * cam.zoom);
     const isActive = activeIdx === i;
-    const isScaling = scalingIdx === i;
 
     ctx.save();
     ctx.strokeStyle = isActive ? '#86efac' : '#22c55e';
@@ -156,20 +227,18 @@ function drawCalibPoints(
     ctx.moveTo(sx, sy - r); ctx.lineTo(sx, sy + r);
     ctx.stroke();
 
-    // Amber scale handles at cardinal points beyond the circle edge
-    if (isScaling) {
-      ctx.strokeStyle = '#fbbf24';
-      ctx.lineWidth = 1.5;
-      const ho = r + CALIB_HANDLE_OFFSET_PX;
-      const hs = CALIB_HANDLE_SIZE_PX;
-      for (const [hx, hy] of [
-        [sx + ho, sy], [sx - ho, sy],
-        [sx, sy - ho], [sx, sy + ho],
-      ]) {
-        ctx.beginPath();
-        ctx.rect(hx - hs, hy - hs, hs * 2, hs * 2);
-        ctx.stroke();
-      }
+    // Amber scale handles always visible at cardinal points beyond the circle edge
+    ctx.strokeStyle = '#fbbf24';
+    ctx.lineWidth = 1.5;
+    const ho = r + CALIB_HANDLE_OFFSET_PX;
+    const hs = CALIB_HANDLE_SIZE_PX;
+    for (const [hx, hy] of [
+      [sx + ho, sy], [sx - ho, sy],
+      [sx, sy - ho], [sx, sy + ho],
+    ]) {
+      ctx.beginPath();
+      ctx.rect(hx - hs, hy - hs, hs * 2, hs * 2);
+      ctx.stroke();
     }
 
     ctx.restore();
@@ -514,6 +583,13 @@ function applyMoveDelta(cmds: PatternCommand[], selectedIds: Set<string>, dx: nu
   });
 }
 
+/** Processed display image passed into renderFrame. */
+interface DisplayImg {
+  canvas: HTMLCanvasElement;
+  origW:  number;
+  origH:  number;
+}
+
 function renderFrame(
   ctx: CanvasRenderingContext2D,
   w: number,
@@ -521,12 +597,11 @@ function renderFrame(
   cam: Camera,
   commands: PatternCommand[],
   selectedIds: Set<string>,
-  imgEl: HTMLImageElement | HTMLCanvasElement | null,
+  displayImg: DisplayImg | null,
   calibTransform: AffineTransform | null,
   isCalibrating: boolean,
   calibPixels: ([number, number] | null)[],
   calibScales: number[],
-  scalingCalibIdx: number | null,
   activeCalibIdx: number | null,
   hiddenValves: Set<number>,
   renderConfig?: RenderConfig,
@@ -537,11 +612,12 @@ function renderFrame(
   ctx.fillStyle = '#374151';
   ctx.fillRect(0, 0, w, h);
 
-  if (imgEl) {
+  if (displayImg) {
+    const { canvas, origW, origH } = displayImg;
     if (isCalibrating || !calibTransform) {
-      drawUncalibratedImage(ctx, imgEl, cam);
+      drawUncalibratedImage(ctx, canvas, cam, origW, origH, w, h);
     } else {
-      drawCalibratedImage(ctx, imgEl, calibTransform, cam);
+      drawCalibratedImage(ctx, canvas, calibTransform, cam, origW);
     }
   }
 
@@ -566,7 +642,7 @@ function renderFrame(
       for (const cmd of commands) {
         drawCommand(ctx, cmd, cam, expandedIds, hiddenValves, connectedStarts, renderConfig, selectedJunctionStarts, searchMatchIds);
       }
-    } else if (!imgEl) {
+    } else if (!displayImg) {
       ctx.fillStyle = '#6b7280';
       ctx.font = '13px sans-serif';
       ctx.textAlign = 'center';
@@ -576,7 +652,7 @@ function renderFrame(
   }
 
   if (isCalibrating && calibPixels.some((p) => p !== null)) {
-    drawCalibPoints(ctx, calibPixels, cam, calibScales, scalingCalibIdx, activeCalibIdx);
+    drawCalibPoints(ctx, calibPixels, cam, calibScales, activeCalibIdx);
   }
 }
 
@@ -664,7 +740,7 @@ function LayersBox({
 
   const panelStyle: React.CSSProperties = position
     ? { position: 'absolute', top: position.y, left: position.x }
-    : { position: 'absolute', top: 8, right: 8 };
+    : { position: 'absolute', top: 8, left: 8 };
 
   return (
     <div
@@ -879,12 +955,12 @@ export default function Canvas() {
     setDeferredLoading(true);
     setDeferredLoadError(null);
     try {
-      const result = await (window as unknown as { electronAPI: { readImage: (p: string) => Promise<{ data: string; mime: string } | null> } }).electronAPI.readImage(pendingBgData.filePath);
+      const result = await (window as unknown as { electronAPI: { readImage: (p: string) => Promise<{ buffer: ArrayBuffer; mime: string } | null> } }).electronAPI.readImage(pendingBgData.filePath);
       if (!result) {
         setDeferredLoadError('Image file not found. It may have been moved or deleted.');
         return;
       }
-      const dataUrl = `data:${result.mime};base64,${result.data}`;
+      const dataUrl = URL.createObjectURL(new Blob([result.buffer], { type: result.mime }));
       setBackgroundImage(patternKey, { filePath: pendingBgData.filePath, dataUrl });
       // Remove the pending entry since the image is now in backgroundImages
       setPendingBgImage(patternKey, null);
@@ -1069,18 +1145,22 @@ export default function Canvas() {
 
   // ── Background image element ──────────────────────────────────────────────
 
-  const [imgEl, setImgEl] = useState<HTMLImageElement | null>(null);
+  const [rawCachedImg, setRawCachedImg] = useState<RawCachedImg | null>(null);
+
+  /** Cross-pattern cache keyed by BackgroundImage object identity. */
+  const imgCacheRef = useRef<Map<object, RawCachedImg>>(new Map());
 
   // Per-file bg image settings and processed (filtered) image
   const bgSettings = useMemo(
     () => bgImageSettingsMap[filePath ?? ''] ?? DEFAULT_BG_IMAGE_SETTINGS,
     [bgImageSettingsMap, filePath],
   );
-  const processedImg = useMemo<HTMLImageElement | HTMLCanvasElement | null>(() => {
-    if (!imgEl) return null;
-    if (isDefaultBgSettings(bgSettings)) return imgEl;
-    return processImage(imgEl, bgSettings);
-  }, [imgEl, bgSettings]);
+  const processedImgData = useMemo<DisplayImg | null>(() => {
+    if (!rawCachedImg) return null;
+    const src = rawCachedImg.rawWorking ?? rawCachedImg.rawThumbnail;
+    const canvas = isDefaultBgSettings(bgSettings) ? src : processImage(src, bgSettings);
+    return { canvas, origW: rawCachedImg.origW, origH: rawCachedImg.origH };
+  }, [rawCachedImg, bgSettings]);
 
   // Bg settings panel open state
   const [bgSettingsOpen, setBgSettingsOpen] = useState(false);
@@ -1143,14 +1223,12 @@ export default function Canvas() {
   const [calibPixels, setCalibPixels]         = useState<([number, number] | null)[]>([]);
   const [activeCalibIdx, setActiveCalibIdx]   = useState<number | null>(null);
   const [calibScales, setCalibScales]         = useState<number[]>([]);
-  const [scalingCalibIdx, setScalingCalibIdx] = useState<number | null>(null);
 
   // Stable refs for use inside window-level mouse callbacks
   const isCalibRef         = useRef(false);
   const calibPixelsRef     = useRef<([number, number] | null)[]>([]);
   const activeCalibIdxRef  = useRef<number | null>(null);
   const calibScalesRef     = useRef<number[]>([]);
-  const scalingCalibIdxRef = useRef<number | null>(null);
   const fiducialsRef       = useRef(fiducials);
   const patternKeyRef      = useRef(patternKey);
 
@@ -1158,22 +1236,37 @@ export default function Canvas() {
   useEffect(() => { calibPixelsRef.current = calibPixels; }, [calibPixels]);
   useEffect(() => { activeCalibIdxRef.current = activeCalibIdx; }, [activeCalibIdx]);
   useEffect(() => { calibScalesRef.current = calibScales; }, [calibScales]);
-  useEffect(() => { scalingCalibIdxRef.current = scalingCalibIdx; }, [scalingCalibIdx]);
   useEffect(() => { fiducialsRef.current = fiducials; }, [fiducials]);
   useEffect(() => { patternKeyRef.current = patternKey; }, [patternKey]);
 
   // Refs for stable ResizeObserver (20D/20E) — updated on every render
-  const isCalibratingRef2 = useRef(isCalibrating);
-  const imgElRef          = useRef(imgEl);
+  const isCalibratingRef2  = useRef(isCalibrating);
+  const rawCachedImgRef    = useRef(rawCachedImg);
   useEffect(() => { isCalibratingRef2.current = isCalibrating; }, [isCalibrating]);
-  useEffect(() => { imgElRef.current = imgEl; }, [imgEl]);
+  useEffect(() => { rawCachedImgRef.current = rawCachedImg; }, [rawCachedImg]);
 
   useEffect(() => {
-    if (!backgroundImage) { setImgEl(null); return; }
+    if (!backgroundImage) { setRawCachedImg(null); return; }
+
+    // Check cross-pattern cache first (instant restore on pattern switch-back)
+    const cached = imgCacheRef.current.get(backgroundImage);
+    if (cached) {
+      setRawCachedImg(cached);
+      return;
+    }
+
     const img = new Image();
     img.onload = () => {
-      setImgEl(img);
-      // Use the pattern key (captured at load time) to check for existing calibration
+      const origW = img.naturalWidth;
+      const origH = img.naturalHeight;
+
+      // ── Stage 1: thumbnail (≤512px) — show immediately ───────────────────
+      const rawThumbnail = downscaleToCanvas(img, THUMBNAIL_PX);
+      const initial: RawCachedImg = { rawThumbnail, rawWorking: null, origW, origH };
+      imgCacheRef.current.set(backgroundImage, initial);
+      setRawCachedImg(initial);
+
+      // ── Calibration / camera fit ──────────────────────────────────────────
       const key = patternKeyRef.current;
       const hasCalib = key && getCalibration(key)?.transform;
       if (!hasCalib) {
@@ -1181,15 +1274,25 @@ export default function Canvas() {
         setIsCalibrating(true);
         setCalibPixels(new Array(fids.length).fill(null));
         setActiveCalibIdx(fids.length > 0 ? 0 : null);
-        setCalibScales(new Array(fids.length).fill(10));
-        setScalingCalibIdx(null);
-        const canvas = canvasRef.current;
-        if (canvas && canvas.width > 0) {
-          cameraRef.current = fitCamera([[0, 0], [img.width, img.height]], canvas.width, canvas.height);
+        const c = canvasRef.current;
+        if (c && c.width > 0) {
+          cameraRef.current = fitCamera([[0, 0], [origW, origH]], c.width, c.height);
           fitZoomRef.current = cameraRef.current.zoom;
           setZoomLevel(1.0);
         }
+        const defaultScale = CALIB_DEFAULT_RADIUS_PX / Math.max(0.001, cameraRef.current.zoom);
+        setCalibScales(new Array(fids.length).fill(defaultScale));
       }
+
+      // ── Stage 2: working res (≤2048px) — upgrade in background ──────────
+      scheduleIdle(() => {
+        // Abort if this backgroundImage is no longer cached (user removed it)
+        if (!imgCacheRef.current.has(backgroundImage)) return;
+        const rawWorking = downscaleToCanvas(img, WORKING_PX);
+        const updated: RawCachedImg = { rawThumbnail, rawWorking, origW, origH };
+        imgCacheRef.current.set(backgroundImage, updated);
+        setRawCachedImg((prev) => (prev === initial ? updated : prev));
+      });
     };
     img.src = backgroundImage.dataUrl;
   // Depend on the whole object — a new object is created each time setBackgroundImage is
@@ -1210,7 +1313,6 @@ export default function Canvas() {
     setCalibPixels([]);
     setActiveCalibIdx(null);
     setCalibScales([]);
-    setScalingCalibIdx(null);
     // Persist bg image path + calibration points as a metadata comment in the pattern
     if (selectedPatternName && backgroundImage) {
       setBgImageComment(selectedPatternName, backgroundImage.filePath, pairs);
@@ -1222,10 +1324,9 @@ export default function Canvas() {
     setCalibPixels([]);
     setActiveCalibIdx(null);
     setCalibScales([]);
-    setScalingCalibIdx(null);
     // Remove the image entirely so the pattern returns to a clean state
     if (patternKey) setBackgroundImage(patternKey, null);
-    setImgEl(null);
+    setRawCachedImg(null);
     // Remove the metadata comment from the pattern (if any)
     if (selectedPatternName) setBgImageComment(selectedPatternName, null, []);
   }, [patternKey, setBackgroundImage, selectedPatternName, setBgImageComment]);
@@ -1237,18 +1338,18 @@ export default function Canvas() {
     const fids = fiducialsRef.current;
     setCalibPixels(new Array(fids.length).fill(null));
     setActiveCalibIdx(fids.length > 0 ? 0 : null);
-    setCalibScales(new Array(fids.length).fill(10));
-    setScalingCalibIdx(null);
     setIsCalibrating(true);
-    if (imgEl) {
+    if (rawCachedImg) {
       const canvas = canvasRef.current;
       if (canvas && canvas.width > 0) {
-        cameraRef.current = fitCamera([[0, 0], [imgEl.width, imgEl.height]], canvas.width, canvas.height);
+        cameraRef.current = fitCamera([[0, 0], [rawCachedImg.origW, rawCachedImg.origH]], canvas.width, canvas.height);
         fitZoomRef.current = cameraRef.current.zoom;
         setZoomLevel(1.0);
       }
     }
-  }, [patternKey, clearCalibrationData, imgEl, setZoomLevel]);
+    const defaultScale = CALIB_DEFAULT_RADIUS_PX / Math.max(0.001, cameraRef.current.zoom);
+    setCalibScales(new Array(fids.length).fill(defaultScale));
+  }, [patternKey, clearCalibrationData, rawCachedImg, setZoomLevel]);
 
   // ── Draw loop ─────────────────────────────────────────────────────────────
 
@@ -1289,9 +1390,9 @@ export default function Canvas() {
       renderFrame(
         ctx, canvas.width, canvas.height, cameraRef.current,
         cmdsForFrame, selectedCommandIds,
-        bgImageVisible ? processedImg : null,
+        bgImageVisible ? processedImgData : null,
         calibration?.transform ?? null, isCalibrating, calibPixels,
-        calibScales, scalingCalibIdx, activeCalibIdx,
+        calibScales, activeCalibIdx,
         hiddenValves,
         { lineThicknesses, dotSizes },
         searchMatchIdsRef.current,
@@ -1370,11 +1471,11 @@ export default function Canvas() {
         const { sx: hsx, sy: hsy } = splitHoverRef.current;
         ctx.save();
         ctx.beginPath();
-        ctx.arc(hsx, hsy, 6, 0, Math.PI * 2);
-        ctx.fillStyle = '#f59e0b';
+        ctx.arc(hsx, hsy, 9, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(239, 68, 68, 0.25)';
         ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 1.5;
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2;
         ctx.stroke();
         ctx.restore();
       }
@@ -1429,7 +1530,7 @@ export default function Canvas() {
       }
     };
     requestAnimationFrame(drawRef.current);
-  }, [commands, selectedCommandIds, processedImg, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, contourFillPolygon, contourFillClosed, contourFillPreviewCmds, lineThicknesses, dotSizes, searchMatchIds]);
+  }, [commands, selectedCommandIds, processedImgData, bgImageVisible, hiddenValves, calibration, isCalibrating, calibPixels, calibScales, activeCalibIdx, areaFillPolygon, areaFillClosed, polyActiveVertIdx, areaFillPreviewCmds, contourFillPolygon, contourFillClosed, contourFillPreviewCmds, lineThicknesses, dotSizes, searchMatchIds]);
 
   // Pan canvas to center on the currently focused search match
   useEffect(() => {
@@ -1480,7 +1581,6 @@ export default function Canvas() {
     setCalibPixels([]);
     setActiveCalibIdx(null);
     setCalibScales([]);
-    setScalingCalibIdx(null);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPatternName, filePath]);
 
@@ -1516,8 +1616,8 @@ export default function Canvas() {
       canvas.width  = Math.floor(width);
       canvas.height = Math.floor(height);
       if (!fittedRef.current) {
-        const pts = isCalibratingRef2.current && imgElRef.current
-          ? [[0, 0], [imgElRef.current.width, imgElRef.current.height]] as [number, number][]
+        const pts = isCalibratingRef2.current && rawCachedImgRef.current
+          ? [[0, 0], [rawCachedImgRef.current.origW, rawCachedImgRef.current.origH]] as [number, number][]
           : collectPoints(commandsRef.current);
         if (pts.length > 0) {
           cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
@@ -1625,6 +1725,7 @@ export default function Canvas() {
   // ── Calibration scale drag ────────────────────────────────────────────────
 
   const calibScaleDragRef = useRef<{ idx: number; centerSx: number; centerSy: number } | null>(null);
+  const calibMoveDragRef  = useRef<{ idx: number; startSx: number; startSy: number; origPx: [number, number] } | null>(null);
 
   const startCalibScaleDrag = useCallback((
     idx: number, centerSx: number, centerSy: number,
@@ -1632,17 +1733,18 @@ export default function Canvas() {
     calibScaleDragRef.current = { idx, centerSx, centerSy };
 
     const handleMove = (e: MouseEvent) => {
-      if (!calibScaleDragRef.current || !canvasRef.current) return;
+      const drag = calibScaleDragRef.current;
+      if (!drag || !canvasRef.current) return;
       const rect = canvasRef.current.getBoundingClientRect();
       const sx = e.clientX - rect.left;
       const sy = e.clientY - rect.top;
-      const { centerSx: csx, centerSy: csy } = calibScaleDragRef.current;
+      const { centerSx: csx, centerSy: csy, idx: scaleIdx } = drag;
       const distPx = Math.max(6, Math.hypot(sx - csx, sy - csy));
       // distPx / zoom converts screen pixels back to world units, matching drawCalibPoints
       const newScale = Math.max(1, distPx / cameraRef.current.zoom);
       setCalibScales((prev) => {
         const next = [...prev];
-        next[calibScaleDragRef.current!.idx] = newScale;
+        next[scaleIdx] = newScale;
         return next;
       });
       requestAnimationFrame(drawRef.current);
@@ -1650,6 +1752,39 @@ export default function Canvas() {
 
     const handleUp = () => {
       calibScaleDragRef.current = null;
+      window.removeEventListener('mousemove', handleMove);
+      window.removeEventListener('mouseup', handleUp);
+    };
+
+    window.addEventListener('mousemove', handleMove);
+    window.addEventListener('mouseup', handleUp);
+  }, []);
+
+  const startCalibMoveDrag = useCallback((
+    idx: number, startSx: number, startSy: number, origPx: [number, number],
+  ) => {
+    calibMoveDragRef.current = { idx, startSx, startSy, origPx };
+
+    const handleMove = (e: MouseEvent) => {
+      const drag = calibMoveDragRef.current;
+      if (!drag || !canvasRef.current) return;
+      const { idx: moveIdx } = drag;
+      const rect = canvasRef.current.getBoundingClientRect();
+      const sx = e.clientX - rect.left;
+      const sy = e.clientY - rect.top;
+      const [wx, wy] = screenToWorld(sx, sy, cameraRef.current);
+      setCalibPixels((prev) => {
+        const next = [...prev];
+        next[moveIdx] = [wx, wy];
+        return next;
+      });
+      if (canvasRef.current) canvasRef.current.style.cursor = 'grabbing';
+      requestAnimationFrame(drawRef.current);
+    };
+
+    const handleUp = () => {
+      calibMoveDragRef.current = null;
+      if (canvasRef.current) canvasRef.current.style.cursor = 'crosshair';
       window.removeEventListener('mousemove', handleMove);
       window.removeEventListener('mouseup', handleUp);
     };
@@ -2009,11 +2144,12 @@ export default function Canvas() {
         if (isCalibrating) {
           const cam = cameraRef.current;
 
-          // 1. Scale handle hit (only when a crosshair is in scaling mode)
-          const scIdx = scalingCalibIdx;
-          if (scIdx !== null && calibPixels[scIdx] != null) {
-            const [csx, csy] = worldToScreen(calibPixels[scIdx]![0], calibPixels[scIdx]![1], cam);
-            const r = Math.max(6, (calibScales[scIdx] ?? 10) * cam.zoom);
+          // 1. Scale handle hit — check all placed crosshairs
+          for (let i = 0; i < calibPixels.length; i++) {
+            const pt = calibPixels[i];
+            if (!pt) continue;
+            const [csx, csy] = worldToScreen(pt[0], pt[1], cam);
+            const r = Math.max(6, (calibScales[i] ?? 10) * cam.zoom);
             const ho = r + CALIB_HANDLE_OFFSET_PX;
             const scaleHandles: [number, number][] = [
               [csx + ho, csy], [csx - ho, csy],
@@ -2021,13 +2157,13 @@ export default function Canvas() {
             ];
             for (const [hsx, hsy] of scaleHandles) {
               if (Math.hypot(sx - hsx, sy - hsy) < 12) {
-                startCalibScaleDrag(scIdx, csx, csy);
+                startCalibScaleDrag(i, csx, csy);
                 return;
               }
             }
           }
 
-          // 2. Click near a placed crosshair → activate that fiducial
+          // 2. Mousedown on a placed crosshair body → start drag-to-move (activate on up if no drag)
           for (let i = 0; i < calibPixels.length; i++) {
             const pt = calibPixels[i];
             if (!pt) continue;
@@ -2035,7 +2171,7 @@ export default function Canvas() {
             const r = Math.max(6, (calibScales[i] ?? 10) * cam.zoom);
             if (Math.hypot(sx - csx, sy - csy) < r + 8) {
               setActiveCalibIdx(i);
-              setScalingCalibIdx(null);
+              startCalibMoveDrag(i, sx, sy, [pt[0], pt[1]]);
               return;
             }
           }
@@ -2043,7 +2179,7 @@ export default function Canvas() {
           // 3. Place pixel coordinate for the active fiducial
           if (activeCalibIdx !== null) {
             const [px, py] = screenToWorld(sx, sy, cam);
-            if (!imgEl || (px >= 0 && py >= 0 && px <= imgEl.width && py <= imgEl.height)) {
+            if (!rawCachedImg || (px >= 0 && py >= 0 && px <= rawCachedImg.origW && py <= rawCachedImg.origH)) {
               const newPixels = [...calibPixels];
               newPixels[activeCalibIdx] = [px, py];
               setCalibPixels(newPixels);
@@ -2289,10 +2425,10 @@ export default function Canvas() {
       }
     },
     [
-      isCalibrating, calibPixels, calibScales, scalingCalibIdx, activeCalibIdx,
+      isCalibrating, calibPixels, calibScales, activeCalibIdx,
       commands, selectedCommandIds,
       selectOne, selectToggle, selectRange, clearSelection,
-      imgEl, startHandleDrag, startCalibScaleDrag, startGroupDrag,
+      rawCachedImg, startHandleDrag, startCalibScaleDrag, startCalibMoveDrag, startGroupDrag,
       insertAfterSelection, insertAboveSelection, setActiveTool, placementPhase,
       setAreaFillPolygon, startPolyDrag,
       setContourFillPolygon, startContourPolyDrag,
@@ -2501,23 +2637,9 @@ export default function Canvas() {
     }
 
     if (isCalibrating) {
-      const rect = canvas.getBoundingClientRect();
-      const sx = e.clientX - rect.left;
-      const sy = e.clientY - rect.top;
-      // Toggle scale handles for the crosshair nearest to the double-click
-      for (let i = 0; i < calibPixels.length; i++) {
-        const pt = calibPixels[i];
-        if (!pt) continue;
-        const [csx, csy] = worldToScreen(pt[0], pt[1], cameraRef.current);
-        const r = Math.max(6, (calibScalesRef.current[i] ?? 10) * cameraRef.current.zoom);
-        if (Math.hypot(sx - csx, sy - csy) < r + 10) {
-          setScalingCalibIdx((prev) => (prev === i ? null : i));
-          return;
-        }
-      }
       return;
     }
-  }, [isCalibrating, calibPixels, setAreaFillPolygon, setAreaFillClosed, setContourFillPolygon, setContourFillClosed]);
+  }, [isCalibrating, setAreaFillPolygon, setAreaFillClosed, setContourFillPolygon, setContourFillClosed]);
 
   // ── Drag-drop (file / image) ──────────────────────────────────────────────
 
@@ -2689,7 +2811,7 @@ export default function Canvas() {
           valves={usedValves}
           hiddenValves={hiddenValves}
           onToggleValve={toggleValve}
-          hasImage={Boolean(imgEl)}
+          hasImage={Boolean(rawCachedImg)}
           imageVisible={bgImageVisible}
           onToggleImage={() => setBgImageVisible((v) => !v)}
           lineThicknesses={lineThicknesses}
@@ -2708,6 +2830,8 @@ export default function Canvas() {
           filePath={filePath}
           anchorRect={bgSettingsAnchorRect}
           onClose={() => setBgSettingsOpen(false)}
+          hasCalibration={Boolean(backgroundImage && calibration?.transform && !isCalibrating)}
+          onRecalibrate={handleRecalibrate}
         />
       )}
 
@@ -2716,20 +2840,12 @@ export default function Canvas() {
           fiducials={fiducials}
           calibPixels={calibPixels}
           activeCalibIdx={activeCalibIdx}
-          onSelectFiducial={(i) => { setActiveCalibIdx(i); setScalingCalibIdx(null); }}
+          onSelectFiducial={(i) => { setActiveCalibIdx(i); }}
           onComplete={handleCalibComplete}
           onCancel={handleCalibCancel}
         />
       )}
 
-      {backgroundImage && calibration?.transform && !isCalibrating && (
-        <button
-          onClick={handleRecalibrate}
-          className="absolute top-2 right-2 bg-gray-800/80 hover:bg-gray-700 border border-gray-600 text-xs text-gray-300 px-2 py-1 rounded"
-        >
-          Recalibrate
-        </button>
-      )}
     </div>
   );
 }

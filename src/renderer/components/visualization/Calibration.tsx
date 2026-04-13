@@ -135,10 +135,10 @@ export default function CalibrationOverlay({
           </div>
         </div>
 
-        {/* Hint for double-click scaling */}
+        {/* Hint for crosshair interaction */}
         {placedCount > 0 && (
           <div className="text-[10px] text-blue-400/70 mt-1.5">
-            Double-click a placed crosshair to get scale handles for visual alignment.
+            Drag a crosshair to reposition it. Use the amber handles to resize it for visual alignment.
           </div>
         )}
       </div>

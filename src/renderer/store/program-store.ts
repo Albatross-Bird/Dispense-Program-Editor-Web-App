@@ -266,9 +266,9 @@ declare global {
       openFile: () => Promise<{ filePath: string; content: string } | null>;
       saveFile: (filePath: string, content: string) => Promise<string | null>;
       saveFileAs: (content: string, defaultPath?: string) => Promise<string | null>;
-      loadImage: () => Promise<{ filePath: string; data: string; mime: string } | null>;
+      loadImage: () => Promise<{ filePath: string; buffer: ArrayBuffer; mime: string } | null>;
       readFile: (filePath: string) => Promise<string | null>;
-      readImage: (filePath: string) => Promise<{ data: string; mime: string } | null>;
+      readImage: (filePath: string) => Promise<{ buffer: ArrayBuffer; mime: string } | null>;
       storeGet: (key: string) => Promise<unknown>;
       storeSet: (key: string, value: unknown) => Promise<void>;
     };

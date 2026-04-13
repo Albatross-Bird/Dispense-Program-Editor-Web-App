@@ -46,12 +46,16 @@ interface BgImageSettingsPanelProps {
   filePath: string;
   anchorRect: DOMRect;
   onClose: () => void;
+  hasCalibration?: boolean;
+  onRecalibrate?: () => void;
 }
 
 export default function BgImageSettingsPanel({
   filePath,
   anchorRect,
   onClose,
+  hasCalibration = false,
+  onRecalibrate,
 }: BgImageSettingsPanelProps) {
   const getBgImageSettings = useSettingsStore((s) => s.getBgImageSettings);
   const setBgImageSettings = useSettingsStore((s) => s.setBgImageSettings);
@@ -221,7 +225,17 @@ export default function BgImageSettingsPanel({
         {/* Divider */}
         <div className="border-t border-gray-700 my-2" />
 
-        {/* 7. Reset */}
+        {/* 7. Recalibrate */}
+        {hasCalibration && onRecalibrate && (
+          <button
+            onClick={() => { onRecalibrate(); onClose(); }}
+            className="w-full text-[11px] py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+          >
+            Recalibrate
+          </button>
+        )}
+
+        {/* 8. Reset */}
         <button
           onClick={() => update({ ...DEFAULT_BG_IMAGE_SETTINGS })}
           className="w-full text-[11px] py-1 bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"

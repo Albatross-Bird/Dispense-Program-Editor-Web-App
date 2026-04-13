@@ -10,7 +10,9 @@ export async function writePrgFileAtomic(filePath: string, content: string): Pro
   await rename(tmp, filePath);
 }
 
-export async function readImageAsBase64(filePath: string): Promise<string> {
-  const buf = await readFile(filePath);
-  return buf.toString('base64');
+export async function readImageAsBuffer(filePath: string): Promise<{ buffer: Buffer; mime: string }> {
+  const buffer = await readFile(filePath);
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  const mime = ext === 'png' ? 'image/png' : 'image/bmp';
+  return { buffer, mime };
 }

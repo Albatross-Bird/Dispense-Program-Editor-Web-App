@@ -5,6 +5,7 @@
   "description": "Dispense program pattern editor",
   "main": ".vite/build/index.js",
   "scripts": {
+    "prestart": "tsc --noEmit -p tsconfig.src.json",
     "start": "electron-forge start",
     "package": "electron-forge package",
     "make": "electron-forge make",

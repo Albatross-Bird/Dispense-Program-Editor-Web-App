@@ -1,6 +1,6 @@
 import { ipcMain, dialog } from 'electron';
 import Store from 'electron-store';
-import { readPrgFile, writePrgFileAtomic, readImageAsBase64 } from './file-io';
+import { readPrgFile, writePrgFileAtomic, readImageAsBuffer } from './file-io';
 import { promises as fs } from 'fs';
 
 const store = new Store<Record<string, unknown>>();
@@ -39,10 +39,8 @@ export function registerIpcHandlers(): void {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     const filePath = result.filePaths[0];
-    const data = await readImageAsBase64(filePath);
-    const ext = filePath.split('.').pop()?.toLowerCase();
-    const mime = ext === 'png' ? 'image/png' : 'image/bmp';
-    return { filePath, data, mime };
+    const { buffer, mime } = await readImageAsBuffer(filePath);
+    return { filePath, buffer, mime };
   });
 
   ipcMain.handle('fs:readFile', async (_event, filePath: string) => {
@@ -55,10 +53,8 @@ export function registerIpcHandlers(): void {
 
   ipcMain.handle('fs:readImage', async (_event, filePath: string) => {
     try {
-      const data = await readImageAsBase64(filePath);
-      const ext = filePath.split('.').pop()?.toLowerCase();
-      const mime = ext === 'png' ? 'image/png' : 'image/bmp';
-      return { data, mime };
+      const { buffer, mime } = await readImageAsBuffer(filePath);
+      return { buffer, mime };
     } catch {
       return null;
     }

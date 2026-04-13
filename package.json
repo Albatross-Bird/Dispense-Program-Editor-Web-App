@@ -10,10 +10,25 @@
     "package": "electron-forge package",
     "make": "electron-forge make",
     "publish": "electron-forge publish",
+    "dist:portable": "electron-forge package && electron-builder --win portable --prepackaged \"out/Pattern Editor-win32-x64\"",
     "lint": "eslint --ext .ts,.tsx .",
     "test": "vitest run && tsc --noEmit -p tsconfig.src.json",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit -p tsconfig.src.json"
+  },
+  "build": {
+    "appId": "com.patterneditor.app",
+    "productName": "Pattern Editor",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [{ "target": "portable", "arch": ["x64"] }],
+      "icon": "MYE.ico"
+    },
+    "portable": {
+      "artifactName": "PatternEditor-${version}-portable.exe"
+    }
   },
   "devDependencies": {
     "@electron-forge/cli": "^7.4.0",
@@ -32,6 +47,7 @@
     "@vitejs/plugin-react": "^4.3.0",
     "autoprefixer": "^10.4.19",
     "electron": "^31.0.0",
+    "electron-builder": "^26.8.1",
     "electron-reload": "^2.0.0-alpha.1",
     "eslint": "^8.57.0",
     "postcss": "^8.4.38",

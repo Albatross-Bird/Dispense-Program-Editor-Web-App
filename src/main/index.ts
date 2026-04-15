@@ -3,7 +3,8 @@ import { join } from 'path';
 import { registerIpcHandlers } from './ipc-handlers';
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
-if (require('electron-squirrel-startup')) app.quit();
+import started from 'electron-squirrel-startup';
+if (started) app.quit();
 
 // In development, watch the built output and restart Electron on changes.
 if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {

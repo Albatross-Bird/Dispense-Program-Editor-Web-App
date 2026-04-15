@@ -162,4 +162,15 @@ export interface Program {
   patterns: Pattern[];
   /** The token used to close the pattern list (.EndTEMP, .EndPattList, etc.) */
   pattListEndToken: string;
+  /**
+   * Whether the source file had a `.Main` header line before the station block.
+   * False for MYD V.100.80.70.146R files, which start directly with `Station A:`.
+   */
+  hasMainHeader: boolean;
+  /**
+   * Raw lines of the `.Patt:TEMP[…]` … `.End` … `.EndTEMP` section that appears
+   * after `.EndPattList` in some software versions.  Preserved verbatim so that
+   * saving the file back does not silently discard the machine's working copy.
+   */
+  tempSection?: string[];
 }

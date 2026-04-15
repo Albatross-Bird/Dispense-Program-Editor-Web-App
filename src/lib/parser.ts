@@ -355,16 +355,22 @@ export function parse(source: string, _profile: SyntaxProfile): Program {
   const lines = source.replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
   if (lines[lines.length - 1] === '') lines.pop();
 
-  const mainStart = lines.indexOf('.Main');
+  // ── Locate .EndMain (required) ────────────────────────────────────────────
   const mainEnd = lines.indexOf('.EndMain');
-  if (mainStart === -1 || mainEnd === -1) {
-    throw new Error('Missing .Main/.EndMain block');
-  }
+  if (mainEnd === -1) throw new Error('Missing .EndMain marker');
 
+  // `.Main` is optional — MYD V.100.80.70.146R files start directly with
+  // `Station A:` and have no `.Main` header line.
+  const mainHeaderIdx = lines.indexOf('.Main');
+  const hasMainHeader = mainHeaderIdx !== -1 && mainHeaderIdx < mainEnd;
+  const mainBlockStart = hasMainHeader ? mainHeaderIdx + 1 : 0;
+
+  // ── Locate .PattList ──────────────────────────────────────────────────────
   const pattListStart = lines.indexOf('.PattList');
   if (pattListStart === -1) throw new Error('Missing .PattList block');
 
-  // Auto-detect the closing token (.EndTEMP, .EndPattList, …)
+  // Auto-detect the closing token for the pattern list (.EndPattList, .EndTEMP, …).
+  // We scan forward and stop at the first `.End*` token that isn't plain `.End`.
   let pattListEnd = -1;
   let pattListEndToken = '.EndTEMP';
   for (let i = pattListStart + 1; i < lines.length; i++) {
@@ -377,7 +383,26 @@ export function parse(source: string, _profile: SyntaxProfile): Program {
   }
   if (pattListEnd === -1) throw new Error('Missing closing token for .PattList block');
 
-  const main = parseMainBlock(lines, mainStart + 1, mainEnd);
+  // ── Capture TEMP section (if present) ────────────────────────────────────
+  // Some software versions write a `.Patt:TEMP[…]` … `.End` … `.EndTEMP`
+  // working-copy block after `.EndPattList`.  We preserve it verbatim so that
+  // saving the file back does not silently discard it.
+  let tempSection: string[] | undefined;
+  if (pattListEndToken !== '.EndTEMP') {
+    // Look for a TEMP section starting immediately after the pattList end token.
+    const tempPattIdx = lines.findIndex(
+      (l, idx) => idx > pattListEnd && l.startsWith('.Patt:TEMP'),
+    );
+    if (tempPattIdx !== -1) {
+      const endTempIdx = lines.indexOf('.EndTEMP', tempPattIdx);
+      if (endTempIdx !== -1) {
+        tempSection = lines.slice(tempPattIdx, endTempIdx + 1);
+      }
+    }
+  }
+
+  // ── Parse main block and patterns ─────────────────────────────────────────
+  const main = parseMainBlock(lines, mainBlockStart, mainEnd);
 
   const patterns: Pattern[] = [];
   let i = pattListStart + 1;
@@ -396,7 +421,7 @@ export function parse(source: string, _profile: SyntaxProfile): Program {
     i++; // skip .End
   }
 
-  return { main, patterns, pattListEndToken };
+  return { main, patterns, pattListEndToken, hasMainHeader, tempSection };
 }
 
 // ── Partial-block helpers (used by the plain-text editor) ─────────────────────
@@ -418,6 +443,17 @@ export function parsePatternBlock(text: string): PatternCommand[] {
  * `text` must include the `.Main` header and `.EndMain` footer.
  */
 export function parseMainBlockText(text: string): MainBlock {
+  const wrapped = `${text.trim()}\n.PattList\n.EndTEMP`;
+  const program = parse(wrapped, {} as SyntaxProfile);
+  return program.main;
+}
+
+/**
+ * Parse just a main block written in the no-header format
+ * (MYD V.100.80.70.146R — no `.Main` line, starts with `Station A:`).
+ * `text` must include the station blocks and `.EndMain` footer.
+ */
+export function parseMainBlockTextNoHeader(text: string): MainBlock {
   const wrapped = `${text.trim()}\n.PattList\n.EndTEMP`;
   const program = parse(wrapped, {} as SyntaxProfile);
   return program.main;

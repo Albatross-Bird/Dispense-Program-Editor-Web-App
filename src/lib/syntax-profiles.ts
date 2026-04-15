@@ -23,6 +23,12 @@ export interface SerializeOverrides {
   pattListEndToken?: string;
   /** Line ending to use. Default: '\r\n' */
   lineEnding?: string;
+  /**
+   * When true, the serializer omits the `.Main` header line and writes the
+   * station block starting directly with `Station A:`.
+   * Used for MYD V.100.80.70.146R and later formats.
+   */
+  omitMainHeader?: boolean;
 }
 
 export interface SyntaxProfile {
@@ -73,8 +79,29 @@ export const MYT_V1: SyntaxProfile = {
   },
 };
 
+/**
+ * MYD V.100.80.70.146R — newer MYD software format observed in the wild.
+ *
+ * Structural differences from MYD_DEFAULT:
+ *  - No `.Main` header line; station block starts directly with `Station A:`
+ *  - Pattern list closes with `.EndPattList` (not `.EndTEMP`)
+ *  - A `.Patt:TEMP[…]` … `.End` … `.EndTEMP` working-copy section may follow
+ *  - `Arc`/`ArcMid` commands appear as active (not `Disable:`-prefixed)
+ *  - `Mark` has no needle-index prefix; `Laser` may have multiple waypoints
+ *    (both already handled verbatim by the parser)
+ */
+export const MYD_V100: SyntaxProfile = {
+  softwareType: 'MYD',
+  version: '.100.80.70.146R',
+  serializeOverrides: {
+    lineEnding: '\r\n',
+    omitMainHeader: true,
+    pattListEndToken: '.EndPattList',
+  },
+};
+
 /** All registered profiles in display order. */
-export const PROFILES: SyntaxProfile[] = [MYD_DEFAULT, MYC_V1, MYT_V1];
+export const PROFILES: SyntaxProfile[] = [MYD_DEFAULT, MYD_V100, MYC_V1, MYT_V1];
 
 /** Look up a profile by softwareType + version, falling back to MYD_DEFAULT. */
 export function getProfile(softwareType: SoftwareType, version: string): SyntaxProfile {

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
-import { MYD_DEFAULT } from '@lib/syntax-profiles';
+import { MYD_DEFAULT, MYD_V100 } from '@lib/syntax-profiles';
 import type {
   LineCommand,
   DotCommand,
@@ -693,9 +693,9 @@ describe('edge cases', () => {
     expect(serialize(prog, MYD_DEFAULT)).toContain('\r\n');
   });
 
-  it('throws on missing .Main/.EndMain', () => {
+  it('throws on missing .EndMain', () => {
     expect(() => parse('.PattList\r\n.EndTEMP', MYD_DEFAULT)).toThrow(
-      'Missing .Main/.EndMain block',
+      'Missing .EndMain marker',
     );
   });
 
@@ -745,5 +745,105 @@ describe('edge cases', () => {
       '.EndTEMP',
     ]);
     expect(serialize(parse(src, MYD_DEFAULT), MYD_DEFAULT)).toBe(src);
+  });
+});
+
+// ── MYD V.100.80.70.146R format ───────────────────────────────────────────────
+
+/**
+ * Minimal file in the MYD V.100.80.70.146R format:
+ *  - No `.Main` header line (stations start immediately)
+ *  - Closes with `.EndPattList` instead of `.EndTEMP`
+ *  - Followed by a `.Patt:TEMP[…]` working-copy section ending with `.EndTEMP`
+ */
+const MYD_V100_PRG = crlf([
+  'Station A:',
+  'DO:myPatt AT(1.000,2.000,3.000)Single A',
+  'EndStation A',
+  'Station B:',
+  'EndStation B',
+  'Station C:',
+  'EndStation C',
+  'Station D:',
+  'EndStation D',
+  '.EndMain',
+  '.PattList',
+  '.Patt:myPatt',
+  'Mark:(1.000,2.000,3.000)-(4.000,5.000,6.000)Two',
+  'Laser:3 AT(1.000,2.000,3.000)-(4.000,5.000,6.000)-(7.000,8.000,9.000)',
+  'Line:1,(1.000,2.000,3.000),ValveOn',
+  'Line:1,(4.000,5.000,6.000),ValveOff,0.8000 mg/mm',
+  'Arc:2,(4.000,5.000,6.000),ValveOn',
+  'ArcMid:2,(5.000,6.000,7.000),ValveOn',
+  'Arc:2,(6.000,7.000,8.000),ValveOff,0.7000 mg/mm',
+  'Dot:1,(7.000,8.000,9.000),ValveOn',
+  '.End',
+  '.EndPattList',
+  '.Patt:TEMP[myPatt](1.000,2.000,3.000)Single A',
+  'Line:1,(1.000,2.000,3.000),ValveOn',
+  'Line:1,(4.000,5.000,6.000),ValveOff,0.5000 mg/mm',
+  '.End',
+  '.EndTEMP',
+]);
+
+describe('MYD V.100.80.70.146R format', () => {
+  it('parses without throwing (no .Main header)', () => {
+    expect(() => parse(MYD_V100_PRG, MYD_V100)).not.toThrow();
+  });
+
+  it('sets hasMainHeader to false', () => {
+    expect(parse(MYD_V100_PRG, MYD_V100).hasMainHeader).toBe(false);
+  });
+
+  it('still sets hasMainHeader to true for a standard .Main file', () => {
+    expect(parse(MINIMAL_PRG, MYD_DEFAULT).hasMainHeader).toBe(true);
+  });
+
+  it('detects .EndPattList as the pattListEndToken', () => {
+    expect(parse(MYD_V100_PRG, MYD_V100).pattListEndToken).toBe('.EndPattList');
+  });
+
+  it('parses station commands correctly', () => {
+    const prog = parse(MYD_V100_PRG, MYD_V100);
+    const stationA = prog.main.stations.find((s) => s.id === 'A')!;
+    expect(stationA.commands).toHaveLength(1);
+    expect(stationA.commands[0].kind).toBe('DO');
+  });
+
+  it('parses patterns correctly', () => {
+    const prog = parse(MYD_V100_PRG, MYD_V100);
+    expect(prog.patterns).toHaveLength(1);
+    expect(prog.patterns[0].name).toBe('myPatt');
+  });
+
+  it('stores Arc/ArcMid as RawCommands', () => {
+    const prog = parse(MYD_V100_PRG, MYD_V100);
+    const cmds = prog.patterns[0].commands;
+    const raws = cmds.filter((c) => c.kind === 'Raw') as RawCommand[];
+    expect(raws.some((r) => r.raw.startsWith('Arc:'))).toBe(true);
+    expect(raws.some((r) => r.raw.startsWith('ArcMid:'))).toBe(true);
+  });
+
+  it('captures the TEMP section verbatim', () => {
+    const prog = parse(MYD_V100_PRG, MYD_V100);
+    expect(prog.tempSection).toBeDefined();
+    expect(prog.tempSection![0]).toBe('.Patt:TEMP[myPatt](1.000,2.000,3.000)Single A');
+    expect(prog.tempSection![prog.tempSection!.length - 1]).toBe('.EndTEMP');
+  });
+
+  it('round-trips the file exactly using the MYD_V100 profile', () => {
+    expect(serialize(parse(MYD_V100_PRG, MYD_V100), MYD_V100)).toBe(MYD_V100_PRG);
+  });
+
+  it('omits .Main header when serializing with MYD_V100 profile', () => {
+    const out = serialize(parse(MYD_V100_PRG, MYD_V100), MYD_V100);
+    expect(out.startsWith('Station A:')).toBe(true);
+    expect(out).not.toContain('.Main\r\n');
+  });
+
+  it('includes TEMP section at end when serializing', () => {
+    const out = serialize(parse(MYD_V100_PRG, MYD_V100), MYD_V100);
+    expect(out).toContain('.EndPattList\r\n.Patt:TEMP[myPatt]');
+    expect(out.endsWith('.EndTEMP')).toBe(true);
   });
 });

@@ -74,9 +74,12 @@ export function serializePatternCommand(cmd: PatternCommand): string[] {
 
 // ── Block-level serializers (for per-block text views) ───────────────────────
 
-export function serializeMainBlock(program: Program): string {
+export function serializeMainBlock(program: Program, profile?: import('./syntax-profiles').SyntaxProfile): string {
   const eol = '\r\n';
-  const lines: string[] = ['.Main'];
+  const omitHeader = profile?.serializeOverrides?.omitMainHeader === true
+    ? true
+    : !program.hasMainHeader;
+  const lines: string[] = omitHeader ? [] : ['.Main'];
   for (const station of program.main.stations) {
     lines.push(`Station ${station.id}:`);
     for (const cmd of station.commands) lines.push(serializeStationCommand(cmd));
@@ -100,7 +103,13 @@ export function serialize(program: Program, profile: SyntaxProfile): string {
   const eol = profile.serializeOverrides?.lineEnding ?? '\r\n';
   const lines: string[] = [];
 
-  lines.push('.Main');
+  // Emit `.Main` header only when the profile does not suppress it AND the
+  // program was originally parsed with a header present.
+  const omitHeader =
+    profile.serializeOverrides?.omitMainHeader === true ||
+    !program.hasMainHeader;
+  if (!omitHeader) lines.push('.Main');
+
   for (const station of program.main.stations) {
     lines.push(`Station ${station.id}:`);
     for (const cmd of station.commands) {
@@ -119,6 +128,11 @@ export function serialize(program: Program, profile: SyntaxProfile): string {
     lines.push('.End');
   }
   lines.push(resolvePattListEndToken(program, profile));
+
+  // Preserve any TEMP section that was present in the source file verbatim.
+  if (program.tempSection && program.tempSection.length > 0) {
+    for (const rawLine of program.tempSection) lines.push(rawLine);
+  }
 
   return lines.join(eol);
 }

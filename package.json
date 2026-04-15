@@ -11,6 +11,7 @@
     "make": "electron-forge make",
     "publish": "electron-forge publish",
     "dist:portable": "electron-forge package && electron-builder --win portable --prepackaged \"out/Pattern Editor-win32-x64\"",
+    "dist:zip": "electron-forge package && powershell -Command \"Compress-Archive -Force -Path 'out/Pattern Editor-win32-x64/*' -DestinationPath 'dist/PatternEditor-0.1.0-win-x64.zip'\"",
     "lint": "eslint --ext .ts,.tsx .",
     "test": "vitest run && tsc --noEmit -p tsconfig.src.json",
     "test:watch": "vitest",

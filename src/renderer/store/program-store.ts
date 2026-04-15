@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import type { Program, Pattern, PatternCommand, LineCommand, DotCommand, CommentCommand, GroupNode } from '@lib/types';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
-import { MYD_DEFAULT, getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
+import { getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
 import { applyReplace } from '@lib/search';
 import type { SearchMatch } from '@lib/search';
 import { useSettingsStore } from './settings-store';

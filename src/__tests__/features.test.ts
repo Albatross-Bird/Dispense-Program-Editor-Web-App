@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { parse } from '@lib/parser';
 import { serialize, fmtPoint, serializePatternCommand } from '@lib/serializer';
-import { MYD_DEFAULT } from '@lib/syntax-profiles';
+import { MYT_V1 } from '@lib/syntax-profiles';
 import type { LineCommand, DotCommand, GroupNode, PatternCommand } from '@lib/types';
 import {
   computeHandles,
@@ -88,7 +88,7 @@ describe('6A — GROUP/ENDGROUP serialization positions', () => {
   ]);
 
   it('serialized output contains ##GROUP before commands', () => {
-    const out = serialize(parse(GROUP_PRG, MYD_DEFAULT), MYD_DEFAULT);
+    const out = serialize(parse(GROUP_PRG, MYT_V1), MYT_V1);
     const lines = out.split('\r\n');
     const groupIdx   = lines.indexOf('Comment:##GROUP:MyGroup');
     const lineOnIdx  = lines.indexOf('Line:1,(100.000,200.000,30.000),ValveOn');
@@ -99,7 +99,7 @@ describe('6A — GROUP/ENDGROUP serialization positions', () => {
   });
 
   it('serialized output contains ##ENDGROUP after the last child', () => {
-    const out = serialize(parse(GROUP_PRG, MYD_DEFAULT), MYD_DEFAULT);
+    const out = serialize(parse(GROUP_PRG, MYT_V1), MYT_V1);
     const lines = out.split('\r\n');
     const dotIdx      = lines.indexOf('Dot:2,(150.000,150.000,30.000),ValveOn');
     const endGroupIdx = lines.indexOf('Comment:##ENDGROUP:MyGroup');
@@ -108,7 +108,7 @@ describe('6A — GROUP/ENDGROUP serialization positions', () => {
   });
 
   it('round-trips the snippet exactly', () => {
-    expect(serialize(parse(GROUP_PRG, MYD_DEFAULT), MYD_DEFAULT)).toBe(GROUP_PRG);
+    expect(serialize(parse(GROUP_PRG, MYT_V1), MYT_V1)).toBe(GROUP_PRG);
   });
 });
 
@@ -367,7 +367,7 @@ describe('6D — serialized coordinates after drag (no floating-point drift)', (
       '.End',
       '.EndTEMP',
     ]);
-    const program = parse(prg, MYD_DEFAULT);
+    const program = parse(prg, MYT_V1);
     const pattern = program.patterns[0];
     const originalLine = pattern.commands[0] as LineCommand;
     expect(originalLine._raw).toBeDefined();
@@ -415,9 +415,9 @@ describe('6E — edge cases', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(prg, MYD_DEFAULT);
+    const prog = parse(prg, MYT_V1);
     expect(prog.patterns[0].commands).toHaveLength(0);
-    expect(serialize(prog, MYD_DEFAULT)).toBe(prg);
+    expect(serialize(prog, MYT_V1)).toBe(prg);
   });
 
   it('pattern with only Comments: parse produces CommentCommand nodes, serialize preserves them', () => {
@@ -430,11 +430,11 @@ describe('6E — edge cases', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(prg, MYD_DEFAULT);
+    const prog = parse(prg, MYT_V1);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(2);
     expect(cmds.every((c) => c.kind === 'Comment')).toBe(true);
-    expect(serialize(prog, MYD_DEFAULT)).toBe(prg);
+    expect(serialize(prog, MYT_V1)).toBe(prg);
     // computeHandles returns nothing for non-Line/Dot commands
     const handles = computeHandles(cmds, new Set(cmds.map((c) => c.id!).filter(Boolean)));
     expect(handles).toHaveLength(0);

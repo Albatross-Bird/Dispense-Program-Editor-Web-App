@@ -2,7 +2,7 @@ import type { Program } from './types';
 
 // ── Profile interface ─────────────────────────────────────────────────────────
 
-export type SoftwareType = 'MYD' | 'MYC' | 'MYT';
+export type SoftwareType = 'MYD' | 'MYT';
 
 /**
  * Overrides applied during parsing.  Each key corresponds to a parsing
@@ -41,48 +41,9 @@ export interface SyntaxProfile {
 // ── Built-in profiles ─────────────────────────────────────────────────────────
 
 /**
- * Default profile for the current MYD format as observed in the wild.
- * The pattern list block ends with `.EndTEMP`.
- */
-export const MYD_DEFAULT: SyntaxProfile = {
-  softwareType: 'MYD',
-  version: '1.0',
-  parseOverrides: {
-    dotAllowsValveOff: true,
-  },
-  serializeOverrides: {
-    lineEnding: '\r\n',
-  },
-};
-
-/** MYC V1.0 — same parser/serializer logic as MYD for now. */
-export const MYC_V1: SyntaxProfile = {
-  softwareType: 'MYC',
-  version: '1.0',
-  parseOverrides: {
-    dotAllowsValveOff: true,
-  },
-  serializeOverrides: {
-    lineEnding: '\r\n',
-  },
-};
-
-/** MYT V1.0 — same parser/serializer logic as MYD for now. */
-export const MYT_V1: SyntaxProfile = {
-  softwareType: 'MYT',
-  version: '1.0',
-  parseOverrides: {
-    dotAllowsValveOff: true,
-  },
-  serializeOverrides: {
-    lineEnding: '\r\n',
-  },
-};
-
-/**
- * MYD V.100.80.70.146R — newer MYD software format observed in the wild.
+ * MYD V.100.80.70.146R — MYD software format observed in the wild.
  *
- * Structural differences from MYD_DEFAULT:
+ * Structural differences from the legacy MYT format:
  *  - No `.Main` header line; station block starts directly with `Station A:`
  *  - Pattern list closes with `.EndPattList` (not `.EndTEMP`)
  *  - A `.Patt:TEMP[…]` … `.End` … `.EndTEMP` working-copy section may follow
@@ -100,12 +61,24 @@ export const MYD_V100: SyntaxProfile = {
   },
 };
 
-/** All registered profiles in display order. */
-export const PROFILES: SyntaxProfile[] = [MYD_DEFAULT, MYD_V100, MYC_V1, MYT_V1];
+/** MYT V1.0 — standard format with `.Main` header and `.EndTEMP` / `.EndPattList` close token. */
+export const MYT_V1: SyntaxProfile = {
+  softwareType: 'MYT',
+  version: '1.0',
+  parseOverrides: {
+    dotAllowsValveOff: true,
+  },
+  serializeOverrides: {
+    lineEnding: '\r\n',
+  },
+};
 
-/** Look up a profile by softwareType + version, falling back to MYD_DEFAULT. */
+/** All registered profiles in display order. */
+export const PROFILES: SyntaxProfile[] = [MYD_V100, MYT_V1];
+
+/** Look up a profile by softwareType + version, falling back to MYD_V100. */
 export function getProfile(softwareType: SoftwareType, version: string): SyntaxProfile {
-  return PROFILES.find((p) => p.softwareType === softwareType && p.version === version) ?? MYD_DEFAULT;
+  return PROFILES.find((p) => p.softwareType === softwareType && p.version === version) ?? MYD_V100;
 }
 
 /** Human-readable display name for a profile, e.g. "MYD V1.0". */

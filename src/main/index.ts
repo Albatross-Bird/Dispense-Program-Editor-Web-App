@@ -25,6 +25,8 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1280,
     height: 800,
+    show: false, // defer show until renderer has painted (eliminates blank-window flash)
+    backgroundColor: '#1f2937', // match app background so any brief flash is the right colour
     icon: join(app.getAppPath(), 'MYE.ico'),
     webPreferences: {
       preload: join(__dirname, 'preload.js'),
@@ -32,6 +34,9 @@ function createWindow() {
       nodeIntegration: false,
     },
   });
+
+  // Show the window only once the renderer has finished its first paint.
+  win.once('ready-to-show', () => win.show());
 
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     win.loadURL(MAIN_WINDOW_VITE_DEV_SERVER_URL);

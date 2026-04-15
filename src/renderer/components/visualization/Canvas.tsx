@@ -11,6 +11,7 @@ import { fitCamera, screenToWorld, worldToScreen, zoomAt } from './camera';
 import { collectPoints, computeConnectedStarts, computeSelectedJunctionStarts, drawCommand, extractMarkFiducials, extractDefaultZ, hitTest, valveColor } from './renderers';
 import type { RenderConfig } from './renderers';
 import { useSettingsStore, DEFAULT_BG_IMAGE_SETTINGS } from '../../store/settings-store';
+import { getProfile } from '@lib/syntax-profiles';
 import type { BgImageSettings } from '../../store/settings-store';
 import BgImageSettingsPanel from './BgImageSettingsPanel';
 import NumberInput from '../NumberInput';
@@ -889,7 +890,7 @@ function fmtCoord(p: [number, number, number]): string {
 export default function Canvas() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef    = useRef<HTMLCanvasElement>(null);
-  const cameraRef    = useRef<Camera>({ zoom: 1, panX: 0, panY: 0 });
+  const cameraRef    = useRef<Camera>({ zoom: 1, panX: 0, panY: 0, flipY: false });
   const drawRef      = useRef<() => void>(() => {});
   const tooltipRef   = useRef<HTMLDivElement>(null);
 
@@ -985,6 +986,16 @@ export default function Canvas() {
   const setLineThickness     = useSettingsStore((s) => s.setLineThickness);
   const setDotSize           = useSettingsStore((s) => s.setDotSize);
   const bgImageSettingsMap   = useSettingsStore((s) => s.bgImageSettings);
+  const softwareType         = useSettingsStore((s) => s.softwareType);
+  const version              = useSettingsStore((s) => s.version);
+
+  // Derive Y-axis orientation from the active profile and keep it in a ref
+  // so event-handler callbacks always see the current value.
+  const flipY    = getProfile(softwareType, version).yAxisUp === true;
+  const flipYRef = useRef(flipY);
+  flipYRef.current             = flipY;
+  cameraRef.current.flipY      = flipY;   // sync immediately on each render
+
   // Refs so event-handler callbacks (which close over stale state) always see current values
   const lineThicknessesRef   = useRef(lineThicknesses);
   const dotSizesRef          = useRef(dotSizes);
@@ -1564,7 +1575,9 @@ export default function Canvas() {
     if (!canvas || canvas.width === 0) return;
     const zoom = cameraRef.current.zoom;
     cameraRef.current.panX = canvas.width  / 2 - wx * zoom;
-    cameraRef.current.panY = canvas.height / 2 - wy * zoom;
+    cameraRef.current.panY = cameraRef.current.flipY
+      ? canvas.height / 2 + wy * zoom
+      : canvas.height / 2 - wy * zoom;
     drawRef.current();
   }, [searchFocusedIdx, searchMatchList, selectedPatternName, commands]);
 
@@ -1590,7 +1603,7 @@ export default function Canvas() {
     if (!canvas || canvas.width === 0) return;
     const pts = collectPoints(commands);
     if (pts.length > 0) {
-      cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
+      cameraRef.current = fitCamera(pts, canvas.width, canvas.height, undefined, flipYRef.current);
       fitZoomRef.current = cameraRef.current.zoom;
       setZoomLevel(1.0);
       fittedRef.current = true;
@@ -1619,18 +1632,24 @@ export default function Canvas() {
         const pts = isCalibratingRef2.current && rawCachedImgRef.current
           ? [[0, 0], [rawCachedImgRef.current.origW, rawCachedImgRef.current.origH]] as [number, number][]
           : collectPoints(commandsRef.current);
+        // Background image calibration uses image-pixel coords (always Y-down, no flip).
+        // Pattern fitting uses the active profile's axis orientation.
+        const fitFlipY = isCalibratingRef2.current ? false : flipYRef.current;
         if (pts.length > 0) {
-          cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
+          cameraRef.current = fitCamera(pts, canvas.width, canvas.height, undefined, fitFlipY);
           fitZoomRef.current = cameraRef.current.zoom;
           setZoomLevel(1.0);
           fittedRef.current = true;
         }
       } else if (prevW > 0 && prevH > 0) {
-        // Preserve the viewport center point across resizes
-        const wx = (prevW / 2 - cameraRef.current.panX) / cameraRef.current.zoom;
-        const wy = (prevH / 2 - cameraRef.current.panY) / cameraRef.current.zoom;
-        cameraRef.current.panX = canvas.width  / 2 - wx * cameraRef.current.zoom;
-        cameraRef.current.panY = canvas.height / 2 - wy * cameraRef.current.zoom;
+        // Preserve the viewport center point across resizes using the proper
+        // inverse transform (handles both Y-down and Y-up orientations).
+        const [wx, wy] = screenToWorld(prevW / 2, prevH / 2, cameraRef.current);
+        const zoom = cameraRef.current.zoom;
+        cameraRef.current.panX = canvas.width  / 2 - wx * zoom;
+        cameraRef.current.panY = cameraRef.current.flipY
+          ? canvas.height / 2 + wy * zoom
+          : canvas.height / 2 - wy * zoom;
       }
       // Draw synchronously — not via rAF — so the canvas is painted in the same
       // browser rendering step that cleared it. Using rAF here would leave a
@@ -1657,7 +1676,7 @@ export default function Canvas() {
     if (!canvas || canvas.width === 0) return;
     const pts = collectPoints(commandsRef.current);
     if (pts.length > 0) {
-      cameraRef.current = fitCamera(pts, canvas.width, canvas.height);
+      cameraRef.current = fitCamera(pts, canvas.width, canvas.height, undefined, flipYRef.current);
       fitZoomRef.current = cameraRef.current.zoom;
       setZoomLevel(1.0);
       requestAnimationFrame(drawRef.current);

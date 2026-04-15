@@ -36,6 +36,12 @@ export interface SyntaxProfile {
   version: string;
   parseOverrides?: ParseOverrides;
   serializeOverrides?: SerializeOverrides;
+  /**
+   * When true the canvas uses a Y-up coordinate system: x=0,y=0 is the
+   * bottom-left corner and positive Y moves upward.
+   * When false/absent (default) the canvas uses Y-down (top-left origin).
+   */
+  yAxisUp?: boolean;
 }
 
 // ── Built-in profiles ─────────────────────────────────────────────────────────
@@ -54,6 +60,7 @@ export interface SyntaxProfile {
 export const MYD_V100: SyntaxProfile = {
   softwareType: 'MYD',
   version: '.100.80.70.146R',
+  yAxisUp: true,
   serializeOverrides: {
     lineEnding: '\r\n',
     omitMainHeader: true,

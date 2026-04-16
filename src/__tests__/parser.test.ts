@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
-import { MYT_V1, MYD_V100 } from '@lib/syntax-profiles';
+import { MYD_TABLETOP, MYD_V100 } from '@lib/syntax-profiles';
 import type {
   LineCommand,
   DotCommand,
@@ -95,28 +95,28 @@ const SAMPLE_PRG = crlf([
 
 describe('parse — minimal program', () => {
   it('parses without throwing', () => {
-    expect(() => parse(MINIMAL_PRG, MYT_V1)).not.toThrow();
+    expect(() => parse(MINIMAL_PRG, MYD_TABLETOP)).not.toThrow();
   });
 
   it('produces 4 stations with no commands', () => {
-    const prog = parse(MINIMAL_PRG, MYT_V1);
+    const prog = parse(MINIMAL_PRG, MYD_TABLETOP);
     expect(prog.main.stations).toHaveLength(4);
     for (const s of prog.main.stations) expect(s.commands).toHaveLength(0);
   });
 
   it('produces no patterns', () => {
-    expect(parse(MINIMAL_PRG, MYT_V1).patterns).toHaveLength(0);
+    expect(parse(MINIMAL_PRG, MYD_TABLETOP).patterns).toHaveLength(0);
   });
 
   it('captures .EndTEMP as pattListEndToken', () => {
-    expect(parse(MINIMAL_PRG, MYT_V1).pattListEndToken).toBe('.EndTEMP');
+    expect(parse(MINIMAL_PRG, MYD_TABLETOP).pattListEndToken).toBe('.EndTEMP');
   });
 });
 
 // ── parse — main block ────────────────────────────────────────────────────────
 
 describe('parse — main block', () => {
-  const prog = parse(SAMPLE_PRG, MYT_V1);
+  const prog = parse(SAMPLE_PRG, MYD_TABLETOP);
 
   it('has 4 stations in the correct order', () => {
     expect(prog.main.stations.map((s) => s.id)).toEqual(['A', 'B', 'C', 'D']);
@@ -158,7 +158,7 @@ describe('parse — main block', () => {
 // ── parse — patterns ──────────────────────────────────────────────────────────
 
 describe('parse — patterns', () => {
-  const prog = parse(SAMPLE_PRG, MYT_V1);
+  const prog = parse(SAMPLE_PRG, MYD_TABLETOP);
 
   it('parses the correct number of patterns', () => {
     expect(prog.patterns).toHaveLength(5);
@@ -175,7 +175,7 @@ describe('parse — patterns', () => {
   });
 
   describe('t4 — Line command pairing', () => {
-    const t4 = parse(SAMPLE_PRG, MYT_V1).patterns.find((p) => p.name === 't4')!;
+    const t4 = parse(SAMPLE_PRG, MYD_TABLETOP).patterns.find((p) => p.name === 't4')!;
 
     it('has a Laser command stored verbatim', () => {
       const laser = t4.commands.find((c) => c.kind === 'Laser');
@@ -220,7 +220,7 @@ describe('parse — patterns', () => {
   });
 
   describe('VacuumSamplesMetalV1 — Mark, Dot, Line', () => {
-    const p = parse(SAMPLE_PRG, MYT_V1).patterns.find(
+    const p = parse(SAMPLE_PRG, MYD_TABLETOP).patterns.find(
       (p) => p.name === 'VacuumSamplesMetalV1',
     )!;
 
@@ -246,7 +246,7 @@ describe('parse — patterns', () => {
 
   describe('t4Pics — Dot with ValveOff', () => {
     it('parses a Dot with ValveOff state', () => {
-      const p = parse(SAMPLE_PRG, MYT_V1).patterns.find(
+      const p = parse(SAMPLE_PRG, MYD_TABLETOP).patterns.find(
         (p) => p.name === 't4Pics',
       )!;
       const dot = p.commands[0] as DotCommand;
@@ -257,7 +257,7 @@ describe('parse — patterns', () => {
   });
 
   describe('withArc — Arc fallback to RawCommand', () => {
-    const p = parse(SAMPLE_PRG, MYT_V1).patterns.find(
+    const p = parse(SAMPLE_PRG, MYD_TABLETOP).patterns.find(
       (p) => p.name === 'withArc',
     )!;
 
@@ -277,7 +277,7 @@ describe('parse — patterns', () => {
   });
 
   describe('orphanedValveOn — consecutive ValveOn lines', () => {
-    const p = parse(SAMPLE_PRG, MYT_V1).patterns.find(
+    const p = parse(SAMPLE_PRG, MYD_TABLETOP).patterns.find(
       (p) => p.name === 'orphanedValveOn',
     )!;
 
@@ -299,17 +299,17 @@ describe('parse — patterns', () => {
 
 describe('serialize — round-trip', () => {
   it('round-trips the minimal program exactly', () => {
-    const prog = parse(MINIMAL_PRG, MYT_V1);
-    expect(serialize(prog, MYT_V1)).toBe(MINIMAL_PRG);
+    const prog = parse(MINIMAL_PRG, MYD_TABLETOP);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(MINIMAL_PRG);
   });
 
   it('round-trips the comprehensive sample exactly', () => {
-    const prog = parse(SAMPLE_PRG, MYT_V1);
-    expect(serialize(prog, MYT_V1)).toBe(SAMPLE_PRG);
+    const prog = parse(SAMPLE_PRG, MYD_TABLETOP);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(SAMPLE_PRG);
   });
 
   it('preserves Mark and Laser raw text', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     expect(out).toContain('Mark:1,(338.551,356.371,46.036)-(181.806,356.551,46.036)Two');
     expect(out).toContain(
       'Laser:3 AT(343.584,181.804,28.474)-(338.622,107.510,28.474)-(365.930,127.038,28.474)',
@@ -317,37 +317,37 @@ describe('serialize — round-trip', () => {
   });
 
   it('preserves trailing zeros in coordinates via _raw', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     // 134.030 has a trailing zero that parseFloat would drop
     expect(out).toContain('Line:1,(154.038,134.030,30.689),ValveOff,0.5000 mg/mm');
   });
 
   it('preserves disabled Line prefix', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     expect(out).toContain('Disable:Line:1,(156.038,248.556,30.689),ValveOn');
     expect(out).toContain('Disable:Line:1,(156.038,134.028,30.689),ValveOff,0.5000 mg/mm');
   });
 
   it('preserves disabled DO prefix', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     expect(out).toContain(
       'Disable:DO:METAPOR - STANDARD AT(338.348,356.491,46.036)Single A',
     );
   });
 
   it('preserves Arc/ArcMid lines verbatim', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     expect(out).toContain('Arc:2,(341.945,128.064,28.622),ValveOn');
     expect(out).toContain('ArcMid:2,(341.369,127.405,29.329),ValveOn');
   });
 
   it('uses .EndTEMP as the closing token', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     expect(out.trimEnd()).toMatch(/\.EndTEMP$/);
   });
 
   it('splits LineCommand into ValveOn + ValveOff lines', () => {
-    const out = serialize(parse(SAMPLE_PRG, MYT_V1), MYT_V1);
+    const out = serialize(parse(SAMPLE_PRG, MYD_TABLETOP), MYD_TABLETOP);
     const lines = out.split('\r\n');
     const onIdx = lines.indexOf('Line:1,(154.038,248.558,30.689),ValveOn');
     expect(onIdx).toBeGreaterThan(-1);
@@ -382,7 +382,7 @@ describe('LineFix commands', () => {
   ]);
 
   it('parses a LineFix pair as LineCommand with commandKeyword="LineFix"', () => {
-    const prog = parse(LINEFIX_PRG, MYT_V1);
+    const prog = parse(LINEFIX_PRG, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(1);
     const cmd = cmds[0] as LineCommand;
@@ -397,7 +397,7 @@ describe('LineFix commands', () => {
   });
 
   it('round-trips LineFix exactly (preserves "LineFix" keyword)', () => {
-    expect(serialize(parse(LINEFIX_PRG, MYT_V1), MYT_V1)).toBe(LINEFIX_PRG);
+    expect(serialize(parse(LINEFIX_PRG, MYD_TABLETOP), MYD_TABLETOP)).toBe(LINEFIX_PRG);
   });
 
   it('does NOT pair a LineFix ValveOn with a Line ValveOff (stores both verbatim)', () => {
@@ -410,7 +410,7 @@ describe('LineFix commands', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(mixed, MYT_V1);
+    const prog = parse(mixed, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     // Both stored as Raw since keywords differ
     expect(cmds).toHaveLength(2);
@@ -419,7 +419,7 @@ describe('LineFix commands', () => {
   });
 
   it('normal Line commands still get commandKeyword="Line"', () => {
-    const prog = parse(SAMPLE_PRG, MYT_V1);
+    const prog = parse(SAMPLE_PRG, MYD_TABLETOP);
     const t4 = prog.patterns.find((p) => p.name === 't4')!;
     const lines = t4.commands.filter((c): c is LineCommand => c.kind === 'Line');
     for (const l of lines) {
@@ -445,7 +445,7 @@ describe('Group/ENDGROUP parsing', () => {
   ]);
 
   it('wraps enclosed commands in a GroupNode', () => {
-    const prog = parse(GROUP_PRG, MYT_V1);
+    const prog = parse(GROUP_PRG, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(1);
     const grp = cmds[0] as GroupNode;
@@ -455,7 +455,7 @@ describe('Group/ENDGROUP parsing', () => {
   });
 
   it('parses the correct children inside the group', () => {
-    const prog = parse(GROUP_PRG, MYT_V1);
+    const prog = parse(GROUP_PRG, MYD_TABLETOP);
     const grp = prog.patterns[0].commands[0] as GroupNode;
     expect(grp.commands).toHaveLength(2);
     expect(grp.commands[0].kind).toBe('Line');
@@ -463,7 +463,7 @@ describe('Group/ENDGROUP parsing', () => {
   });
 
   it('round-trips GROUP/ENDGROUP exactly', () => {
-    expect(serialize(parse(GROUP_PRG, MYT_V1), MYT_V1)).toBe(GROUP_PRG);
+    expect(serialize(parse(GROUP_PRG, MYD_TABLETOP), MYD_TABLETOP)).toBe(GROUP_PRG);
   });
 
   it('handles multiple groups in the same pattern', () => {
@@ -480,12 +480,12 @@ describe('Group/ENDGROUP parsing', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(2);
     expect((cmds[0] as GroupNode).name).toBe('Alpha');
     expect((cmds[1] as GroupNode).name).toBe('Beta');
-    expect(serialize(prog, MYT_V1)).toBe(src);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(src);
   });
 
   it('commands outside groups are still parsed normally', () => {
@@ -501,13 +501,13 @@ describe('Group/ENDGROUP parsing', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(3);
     expect(cmds[0].kind).toBe('Dot');
     expect(cmds[1].kind).toBe('Group');
     expect(cmds[2].kind).toBe('Dot');
-    expect(serialize(prog, MYT_V1)).toBe(src);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(src);
   });
 });
 
@@ -526,14 +526,14 @@ describe('GROUP without matching ENDGROUP', () => {
   ]);
 
   it('treats the unmatched GROUP marker as a regular Comment', () => {
-    const prog = parse(UNMATCHED_PRG, MYT_V1);
+    const prog = parse(UNMATCHED_PRG, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds[0].kind).toBe('Comment');
     expect((cmds[0] as CommentCommand).text).toBe('##GROUP:Orphan');
   });
 
   it('still parses the remaining commands after the unmatched GROUP', () => {
-    const prog = parse(UNMATCHED_PRG, MYT_V1);
+    const prog = parse(UNMATCHED_PRG, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     // Comment:##GROUP:Orphan + Line pair = 2 commands
     expect(cmds).toHaveLength(2);
@@ -550,7 +550,7 @@ describe('GROUP without matching ENDGROUP', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds[0].kind).toBe('Comment');
     expect((cmds[0] as CommentCommand).text).toBe('##ENDGROUP:NoStart');
@@ -576,7 +576,7 @@ describe('Nested groups', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     expect(cmds).toHaveLength(1);
     const outer = cmds[0] as GroupNode;
@@ -605,7 +605,7 @@ describe('Nested groups', () => {
       '.End',
       '.EndTEMP',
     ]);
-    expect(serialize(parse(src, MYT_V1), MYT_V1)).toBe(src);
+    expect(serialize(parse(src, MYD_TABLETOP), MYD_TABLETOP)).toBe(src);
   });
 
   it('unclosed outer group flattens to root; mismatched ENDGROUP closes innermost', () => {
@@ -624,7 +624,7 @@ describe('Nested groups', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     const cmds = prog.patterns[0].commands;
     // root = [Comment:##GROUP:Outer, GroupNode(Inner)]
     expect(cmds).toHaveLength(2);
@@ -656,9 +656,9 @@ describe('edge cases', () => {
       '.PattList',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     expect(prog.patterns).toHaveLength(0);
-    expect(serialize(prog, MYT_V1)).toBe(src);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(src);
   });
 
   it('round-trips a pattern with only comments', () => {
@@ -680,27 +680,27 @@ describe('edge cases', () => {
       '.End',
       '.EndTEMP',
     ]);
-    const prog = parse(src, MYT_V1);
+    const prog = parse(src, MYD_TABLETOP);
     expect(prog.patterns[0].commands).toHaveLength(2);
-    expect(serialize(prog, MYT_V1)).toBe(src);
+    expect(serialize(prog, MYD_TABLETOP)).toBe(src);
   });
 
   it('handles LF-only line endings during parsing', () => {
     const lfSrc = MINIMAL_PRG.replace(/\r\n/g, '\n');
-    const prog = parse(lfSrc, MYT_V1);
+    const prog = parse(lfSrc, MYD_TABLETOP);
     expect(prog.main.stations).toHaveLength(4);
-    // Serializer always emits CRLF per MYT_V1 profile
-    expect(serialize(prog, MYT_V1)).toContain('\r\n');
+    // Serializer always emits CRLF per MYD_TABLETOP profile
+    expect(serialize(prog, MYD_TABLETOP)).toContain('\r\n');
   });
 
   it('throws on missing .EndMain', () => {
-    expect(() => parse('.PattList\r\n.EndTEMP', MYT_V1)).toThrow(
+    expect(() => parse('.PattList\r\n.EndTEMP', MYD_TABLETOP)).toThrow(
       'Missing .EndMain marker',
     );
   });
 
   it('throws on missing .PattList', () => {
-    expect(() => parse('.Main\r\n.EndMain', MYT_V1)).toThrow(
+    expect(() => parse('.Main\r\n.EndMain', MYD_TABLETOP)).toThrow(
       'Missing .PattList block',
     );
   });
@@ -725,7 +725,7 @@ describe('edge cases', () => {
       '.End',
       '.EndTEMP',
     ]);
-    expect(serialize(parse(src, MYT_V1), MYT_V1)).toBe(src);
+    expect(serialize(parse(src, MYD_TABLETOP), MYD_TABLETOP)).toBe(src);
   });
 
   it('preserves a disabled DO command through round-trip', () => {
@@ -744,7 +744,7 @@ describe('edge cases', () => {
       '.PattList',
       '.EndTEMP',
     ]);
-    expect(serialize(parse(src, MYT_V1), MYT_V1)).toBe(src);
+    expect(serialize(parse(src, MYD_TABLETOP), MYD_TABLETOP)).toBe(src);
   });
 });
 
@@ -796,7 +796,7 @@ describe('MYD V.100.80.70.146R format', () => {
   });
 
   it('still sets hasMainHeader to true for a standard .Main file', () => {
-    expect(parse(MINIMAL_PRG, MYT_V1).hasMainHeader).toBe(true);
+    expect(parse(MINIMAL_PRG, MYD_TABLETOP).hasMainHeader).toBe(true);
   });
 
   it('detects .EndPattList as the pattListEndToken', () => {

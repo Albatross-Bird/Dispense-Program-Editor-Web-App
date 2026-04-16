@@ -11,7 +11,7 @@ export interface Camera {
 
 /**
  * World → screen.
- * With flipY=false (default/MYT): screenY = wy * zoom + panY  (Y-down)
+ * With flipY=false (default/Tabletop): screenY = wy * zoom + panY  (Y-down)
  * With flipY=true  (MYD):         screenY = -wy * zoom + panY (Y-up)
  */
 export function worldToScreen(wx: number, wy: number, cam: Camera): [number, number] {

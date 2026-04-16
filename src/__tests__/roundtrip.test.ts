@@ -10,7 +10,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { parse } from '@lib/parser';
 import { serialize } from '@lib/serializer';
-import { MYT_V1 } from '@lib/syntax-profiles';
+import { MYD_TABLETOP } from '@lib/syntax-profiles';
 import type { LineCommand } from '@lib/types';
 
 const PRG_PATH = join(__dirname, '../../Startecx - 51E Sample Dispensing.prg');
@@ -32,16 +32,16 @@ describe('round-trip — Startecx 51E Sample Dispensing.prg', () => {
   }
 
   it('parses without throwing', () => {
-    expect(() => parse(source, MYT_V1)).not.toThrow();
+    expect(() => parse(source, MYD_TABLETOP)).not.toThrow();
   });
 
   it('produces the correct number of stations', () => {
-    const prog = parse(source, MYT_V1);
+    const prog = parse(source, MYD_TABLETOP);
     expect(prog.main.stations.map((s) => s.id)).toEqual(['A', 'B', 'C', 'D']);
   });
 
   it('parses all patterns', () => {
-    const prog = parse(source, MYT_V1);
+    const prog = parse(source, MYD_TABLETOP);
     expect(prog.patterns.length).toBeGreaterThan(0);
     // Verify none have the empty name
     for (const p of prog.patterns) {
@@ -50,12 +50,12 @@ describe('round-trip — Startecx 51E Sample Dispensing.prg', () => {
   });
 
   it('captures the closing token from the file (.EndTEMP or .EndPattList)', () => {
-    const prog = parse(source, MYT_V1);
+    const prog = parse(source, MYD_TABLETOP);
     expect(prog.pattListEndToken).toMatch(/^\.(EndTEMP|EndPattList)$/);
   });
 
   it('parses LineFix pairs as LineCommand with commandKeyword="LineFix"', () => {
-    const prog = parse(source, MYT_V1);
+    const prog = parse(source, MYD_TABLETOP);
 
     // Flatten commands, recursing into groups
     function flatten(cmds: ReturnType<typeof prog.patterns>[0]['commands']): LineCommand[] {
@@ -94,8 +94,8 @@ describe('round-trip — Startecx 51E Sample Dispensing.prg', () => {
   });
 
   it('serializes back to the original source byte-for-byte (through the closing token)', () => {
-    const prog = parse(source, MYT_V1);
-    const reserialized = serialize(prog, MYT_V1);
+    const prog = parse(source, MYD_TABLETOP);
+    const reserialized = serialize(prog, MYD_TABLETOP);
 
     // The parser reads up to (and including) the PattList closing token and
     // ignores any content that follows it (e.g. a trailing TEMP block).

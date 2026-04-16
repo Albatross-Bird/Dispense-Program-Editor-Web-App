@@ -2,7 +2,7 @@ import type { Program } from './types';
 
 // ── Profile interface ─────────────────────────────────────────────────────────
 
-export type SoftwareType = 'MYD' | 'MYT';
+export type SoftwareType = 'MYD';
 
 /**
  * Overrides applied during parsing.  Each key corresponds to a parsing
@@ -49,7 +49,7 @@ export interface SyntaxProfile {
 /**
  * MYD V.100.80.70.146R — MYD software format observed in the wild.
  *
- * Structural differences from the legacy MYT format:
+ * Structural differences from the MYD V1.200.80.68.02.45 (Tabletop) format:
  *  - No `.Main` header line; station block starts directly with `Station A:`
  *  - Pattern list closes with `.EndPattList` (not `.EndTEMP`)
  *  - A `.Patt:TEMP[…]` … `.End` … `.EndTEMP` working-copy section may follow
@@ -68,10 +68,10 @@ export const MYD_V100: SyntaxProfile = {
   },
 };
 
-/** MYT V1.0 — standard format with `.Main` header and `.EndTEMP` / `.EndPattList` close token. */
-export const MYT_V1: SyntaxProfile = {
-  softwareType: 'MYT',
-  version: '1.0',
+/** MYD V1.200.80.68.02.45 (Tabletop) — standard tabletop format with `.Main` header and `.EndTEMP` / `.EndPattList` close token. */
+export const MYD_TABLETOP: SyntaxProfile = {
+  softwareType: 'MYD',
+  version: '1.200.80.68.02.45 (Tabletop)',
   parseOverrides: {
     dotAllowsValveOff: true,
   },
@@ -81,7 +81,7 @@ export const MYT_V1: SyntaxProfile = {
 };
 
 /** All registered profiles in display order. */
-export const PROFILES: SyntaxProfile[] = [MYD_V100, MYT_V1];
+export const PROFILES: SyntaxProfile[] = [MYD_V100, MYD_TABLETOP];
 
 /** Look up a profile by softwareType + version, falling back to MYD_V100. */
 export function getProfile(softwareType: SoftwareType, version: string): SyntaxProfile {

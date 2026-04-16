@@ -65,7 +65,7 @@ async function storeGet<T>(key: string, fallback: T): Promise<T> {
 
 export const useSettingsStore = create<SettingsStore>((set, get) => ({
   softwareType: 'MYD',
-  version: '1.0',
+  version: '1.200.80.68.02.45 (Tabletop)',
   language: 'en',
   recentFiles: [],
   loaded: false,
@@ -75,7 +75,7 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
 
   init: async () => {
     const softwareType    = await storeGet<SoftwareType>('softwareType', 'MYD');
-    const version         = await storeGet<string>('version', '1.0');
+    const version         = await storeGet<string>('version', '1.200.80.68.02.45 (Tabletop)');
     const language        = await storeGet<Lang>('language', 'en');
     const recentFiles     = await storeGet<string[]>('recentFiles', []);
     const lineThicknesses = await storeGet<number[]>('lineThicknesses', Array(10).fill(DEFAULT_LINE_THICKNESS));

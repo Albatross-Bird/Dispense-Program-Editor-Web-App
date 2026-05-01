@@ -13,6 +13,8 @@ export interface ParseOverrides {
   pattListEndToken?: string;
   /** Whether Dot commands can carry ValveOff (true for all known versions) */
   dotAllowsValveOff?: boolean;
+  /** Keywords recognized as dispense-line commands. Default: ["Line", "LineFix"] */
+  lineKeywords?: string[];
 }
 
 /**
@@ -42,11 +44,29 @@ export interface SyntaxProfile {
    * When false/absent (default) the canvas uses Y-down (top-left origin).
    */
   yAxisUp?: boolean;
+
+  // ── Fields populated when a profile is loaded from a .prgdef.json file ──
+
+  /** Kebab-case id from the definition file, e.g. "MYD-V100-80-70-146R". */
+  definitionId?: string;
+  /** Human-readable label from the definition file. */
+  definitionDisplayName?: string;
+  /** Developer notes from the definition file's `notes` field. */
+  notes?: string;
+  /** True when this profile was constructed from a .prgdef.json definition. */
+  _loadedFromDefinition?: true;
+  /** True when the definition's schemaVersion exceeds what this build supports. */
+  _newerSchema?: boolean;
+  /** True when this profile was loaded from the user data directory, not the built-in resources. */
+  _userInstalled?: boolean;
 }
 
 // ── Built-in profiles ─────────────────────────────────────────────────────────
 
 /**
+ * @deprecated Use the .prgdef.json definition files and loadAllProfiles().
+ *  Kept as emergency fallback only. Do not use in new code.
+ *
  * MYD V.100.80.70.146R — MYD software format observed in the wild.
  *
  * Structural differences from the MYD V1.200.80.68.02.45 (Tabletop) format:
@@ -68,7 +88,12 @@ export const MYD_V100: SyntaxProfile = {
   },
 };
 
-/** MYD V1.200.80.68.02.45 (Tabletop) — standard tabletop format with `.Main` header and `.EndTEMP` / `.EndPattList` close token. */
+/**
+ * @deprecated Use the .prgdef.json definition files and loadAllProfiles().
+ *  Kept as emergency fallback only. Do not use in new code.
+ *
+ * MYD V1.200.80.68.02.45 (Tabletop) — standard tabletop format with `.Main` header and `.EndTEMP` / `.EndPattList` close token.
+ */
 export const MYD_TABLETOP: SyntaxProfile = {
   softwareType: 'MYD',
   version: '1.200.80.68.02.45 (Tabletop)',
@@ -80,7 +105,10 @@ export const MYD_TABLETOP: SyntaxProfile = {
   },
 };
 
-/** All registered profiles in display order. */
+/**
+ * @deprecated Use the .prgdef.json definition files and loadAllProfiles().
+ *  Kept as emergency fallback only. Do not use in new code.
+ */
 export const PROFILES: SyntaxProfile[] = [MYD_V100, MYD_TABLETOP];
 
 /** Look up a profile by softwareType + version, falling back to MYD_V100. */

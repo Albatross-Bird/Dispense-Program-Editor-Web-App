@@ -271,6 +271,10 @@ declare global {
       readImage: (filePath: string) => Promise<{ buffer: ArrayBuffer; mime: string } | null>;
       storeGet: (key: string) => Promise<unknown>;
       storeSet: (key: string, value: unknown) => Promise<void>;
+      getProfiles: () => Promise<SyntaxProfile[]>;
+      getUserProfilesDir: () => Promise<string>;
+      reloadProfiles: () => Promise<SyntaxProfile[]>;
+      openPath: (path: string) => Promise<void>;
     };
   }
 }

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1",
+  "id": "MYD-TABLETOP-1200-80-68",
+  "displayName": "MYD V1.200.80.68.02.45 (Tabletop)",
+  "softwareFamily": "MYD",
+  "version": "1.200.80.68.02.45 (Tabletop)",
+  "notes": "Standard MYD tabletop format with .Main header, .EndTEMP close token, and Y-down coordinate system (top-left origin).",
+  "display": {
+    "yAxisUp": false
+  },
+  "structure": {
+    "mainHeaderPresent": true,
+    "pattListCloseToken": ".EndTEMP",
+    "lineEnding": "CRLF"
+  },
+  "commands": {
+    "dot": {
+      "allowsValveOff": true
+    }
+  }
+}

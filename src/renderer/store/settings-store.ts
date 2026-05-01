@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { SoftwareType } from '@lib/syntax-profiles';
+import { PROFILES, type SoftwareType, type SyntaxProfile } from '@lib/syntax-profiles';
 import type { Lang } from '@lib/i18n';
 
 export const DEFAULT_LINE_THICKNESS = 0.5; // mm
@@ -46,8 +46,13 @@ interface SettingsStore {
   dotSizes: number[];
   /** Per-file background image display settings. Key = absolute file path. */
   bgImageSettings: Record<string, BgImageSettings>;
+  /** Loaded syntax profiles. Falls back to the hardcoded PROFILES array until IPC resolves. */
+  profiles: SyntaxProfile[];
+  /** True once the first successful IPC load has completed. */
+  profilesLoaded: boolean;
 
   init: () => Promise<void>;
+  loadProfiles: () => Promise<void>;
   setSoftwareType: (type: SoftwareType) => Promise<void>;
   setVersion: (version: string) => Promise<void>;
   setLanguage: (lang: Lang) => Promise<void>;
@@ -72,6 +77,8 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
   lineThicknesses: Array(10).fill(DEFAULT_LINE_THICKNESS),
   dotSizes: Array(10).fill(DEFAULT_DOT_SIZE),
   bgImageSettings: {},
+  profiles: PROFILES,
+  profilesLoaded: false,
 
   init: async () => {
     const softwareType    = await storeGet<SoftwareType>('softwareType', 'MYD');
@@ -82,6 +89,17 @@ export const useSettingsStore = create<SettingsStore>((set, get) => ({
     const dotSizes        = await storeGet<number[]>('dotSizes', Array(10).fill(DEFAULT_DOT_SIZE));
     const bgImageSettings = await storeGet<Record<string, BgImageSettings>>('bgImageSettings', {});
     set({ softwareType, version, language, recentFiles, lineThicknesses, dotSizes, bgImageSettings, loaded: true });
+  },
+
+  loadProfiles: async () => {
+    try {
+      const loaded = await window.electronAPI.getProfiles();
+      if (loaded.length > 0) {
+        set({ profiles: loaded, profilesLoaded: true });
+      }
+    } catch (err) {
+      console.warn('Failed to load profiles via IPC, using built-in fallback:', err);
+    }
   },
 
   setSoftwareType: async (softwareType: SoftwareType) => {

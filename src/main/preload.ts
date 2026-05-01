@@ -17,4 +17,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('store:get', key),
   storeSet: (key: string, value: unknown) =>
     ipcRenderer.invoke('store:set', key, value),
+  getProfiles: () =>
+    ipcRenderer.invoke('get-profiles'),
+  getUserProfilesDir: () =>
+    ipcRenderer.invoke('get-user-profiles-dir'),
+  reloadProfiles: () =>
+    ipcRenderer.invoke('reload-profiles'),
+  openPath: (path: string) =>
+    ipcRenderer.invoke('open-path', path),
 });

@@ -8,7 +8,7 @@ import type { Pattern, Program } from '@lib/types';
 import { parsePatternBlock, parseMainBlockText } from '@lib/parser';
 import { searchProgram } from '@lib/search';
 import type { SearchScope } from '@lib/search';
-import { PROFILES, profileLabel, getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
+import { profileLabel, getProfile, type SyntaxProfile } from '@lib/syntax-profiles';
 import Canvas from './components/visualization/Canvas';
 import PatternCommandList from './components/PatternCommandList';
 import ToolPanel from './components/ToolPanel';
@@ -122,10 +122,13 @@ function VersionSelector() {
   const version         = useSettingsStore((s) => s.version);
   const setSoftwareType = useSettingsStore((s) => s.setSoftwareType);
   const setVersion      = useSettingsStore((s) => s.setVersion);
+  const profiles        = useSettingsStore((s) => s.profiles);
   const reloadWithProfile = useProgramStore((s) => s.reloadWithProfile);
 
   const [open, setOpen]             = useState(false);
   const [errorDialog, setErrorDialog] = useState<{ profile: string; previous: string } | null>(null);
+  const [tooltipId, setTooltipId]   = useState<string | null>(null);
+  const tooltipTimerRef             = useRef<ReturnType<typeof setTimeout> | null>(null);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -137,6 +140,24 @@ function VersionSelector() {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // Clear tooltip when dropdown closes
+  useEffect(() => {
+    if (!open) {
+      if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+      setTooltipId(null);
+    }
+  }, [open]);
+
+  const handleTooltipEnter = (id: string) => {
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    tooltipTimerRef.current = setTimeout(() => setTooltipId(id), 400);
+  };
+
+  const handleTooltipLeave = () => {
+    if (tooltipTimerRef.current) clearTimeout(tooltipTimerRef.current);
+    setTooltipId(null);
+  };
+
   const currentLabel = `${softwareType} V${version}`;
 
   const handleSelect = useCallback(async (profile: SyntaxProfile) => {
@@ -144,7 +165,7 @@ function VersionSelector() {
     if (profile.softwareType === softwareType && profile.version === version) return;
 
     const previousLabel = currentLabel;
-    const newLabel = profileLabel(profile);
+    const newLabel = profile.definitionDisplayName ?? profileLabel(profile);
 
     // Optimistically update settings
     await setSoftwareType(profile.softwareType);
@@ -173,22 +194,50 @@ function VersionSelector() {
         </button>
         {open && (
           <div className="absolute top-full left-0 mt-0.5 bg-gray-800 border border-gray-600 rounded shadow-xl z-50 py-1 min-w-[110px]">
-            {PROFILES.map((p) => {
-              const label = profileLabel(p);
+            {profiles.map((p) => {
+              const id    = p.definitionId ?? p.version;
+              const label = p.definitionDisplayName ?? profileLabel(p);
               const active = p.softwareType === softwareType && p.version === version;
               return (
-                <button
-                  key={label}
-                  onClick={() => handleSelect(p)}
-                  className={[
-                    'w-full text-left px-4 py-1.5 text-xs font-mono transition-colors',
-                    active
-                      ? 'text-blue-300 bg-blue-900/30'
-                      : 'text-gray-300 hover:bg-gray-600',
-                  ].join(' ')}
-                >
-                  {label}
-                </button>
+                <div key={id} className="relative">
+                  <button
+                    onClick={() => handleSelect(p)}
+                    onMouseEnter={() => handleTooltipEnter(id)}
+                    onMouseLeave={handleTooltipLeave}
+                    className={[
+                      'w-full text-left px-4 py-1.5 text-xs font-mono transition-colors',
+                      active
+                        ? 'text-blue-300 bg-blue-900/30'
+                        : 'text-gray-300 hover:bg-gray-600',
+                    ].join(' ')}
+                  >
+                    {label}
+                  </button>
+                  {tooltipId === id && (
+                    <div className="absolute left-full top-0 ml-1.5 z-[60] w-56 bg-gray-900 border border-gray-600 rounded shadow-xl p-2.5 pointer-events-none">
+                      <p className="text-xs font-semibold text-gray-100 mb-1">{label}</p>
+                      {p.notes && (
+                        <p className="text-[11px] text-gray-400 leading-snug mb-1.5">{p.notes}</p>
+                      )}
+                      <div className="flex flex-wrap gap-1 mt-1">
+                        {p._userInstalled ? (
+                          <span className="px-1.5 py-0.5 text-[10px] bg-blue-900/50 text-blue-300 border border-blue-700/50 rounded">
+                            User-installed
+                          </span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 text-[10px] bg-gray-700 text-gray-400 border border-gray-600 rounded">
+                            Built-in
+                          </span>
+                        )}
+                        {p._newerSchema && (
+                          <span className="text-[10px] text-yellow-400">
+                            ⚠ Created for a newer version of Pattern Editor
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -1262,12 +1311,12 @@ export default function App() {
   const splitRatio      = useUIStore((s) => s.splitRatio);
   const setSplitRatio   = useUIStore((s) => s.setSplitRatio);
   const historyPanelOpen = useUIStore((s) => s.historyPanelOpen);
-  const { init: initSettings, addRecentFile } = useSettingsStore();
+  const { init: initSettings, addRecentFile, loadProfiles } = useSettingsStore();
   const { init: initCalibrations } = useCalibrationStore();
 
   const containerRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { initSettings(); initCalibrations(); }, []);
+  useEffect(() => { initSettings(); initCalibrations(); loadProfiles(); }, []);
 
   useEffect(() => {
     if (filePath) addRecentFile(filePath);

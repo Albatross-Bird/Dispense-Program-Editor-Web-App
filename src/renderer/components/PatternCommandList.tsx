@@ -389,7 +389,7 @@ export default function PatternCommandList({
       if (next.has(key)) next.delete(key); else next.add(key);
       return next;
     });
-  }, []);
+  }, [setExpandedGroups]);
 
   const handleRowClick = useCallback(
     (e: React.MouseEvent, id: string) => {

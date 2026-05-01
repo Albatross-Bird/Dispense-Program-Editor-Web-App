@@ -1,11 +1,16 @@
-import { ipcMain, dialog } from 'electron';
+import { ipcMain, dialog, shell } from 'electron';
 import Store from 'electron-store';
 import { readPrgFile, writePrgFileAtomic, readImageAsBuffer } from './file-io';
 import { promises as fs } from 'fs';
+import { loadAllProfiles, getUserProfilesDir } from './profile-loader';
+import type { SyntaxProfile } from '../lib/syntax-profiles';
 
 const store = new Store<Record<string, unknown>>();
 
+let profileCache: SyntaxProfile[] | null = null;
+
 export function registerIpcHandlers(): void {
+  profileCache = loadAllProfiles();
   ipcMain.handle('dialog:openFile', async () => {
     const result = await dialog.showOpenDialog({
       filters: [{ name: 'Program Files', extensions: ['prg'] }],
@@ -64,4 +69,15 @@ export function registerIpcHandlers(): void {
   ipcMain.handle('store:set', (_event, key: string, value: unknown) => {
     store.set(key, value);
   });
+
+  ipcMain.handle('get-profiles', () => profileCache);
+
+  ipcMain.handle('get-user-profiles-dir', () => getUserProfilesDir());
+
+  ipcMain.handle('reload-profiles', () => {
+    profileCache = loadAllProfiles();
+    return profileCache;
+  });
+
+  ipcMain.handle('open-path', (_event, p: string) => shell.openPath(p));
 }

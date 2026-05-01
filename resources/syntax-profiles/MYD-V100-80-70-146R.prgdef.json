@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "1",
+  "id": "MYD-V100-80-70-146R",
+  "displayName": "MYD V.100.80.70.146R",
+  "softwareFamily": "MYD",
+  "version": ".100.80.70.146R",
+  "notes": "MYD inline machine format. No .Main header; pattern list closes with .EndPattList; Y-up coordinate system (bottom-left origin).",
+  "display": {
+    "yAxisUp": true
+  },
+  "structure": {
+    "mainHeaderPresent": false,
+    "pattListCloseToken": ".EndPattList",
+    "lineEnding": "CRLF"
+  },
+  "commands": {
+    "dot": {
+      "allowsValveOff": true
+    }
+  }
+}

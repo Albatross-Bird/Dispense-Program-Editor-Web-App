@@ -175,14 +175,17 @@ function drawCalibratedImage(
   origW: number,
 ) {
   const displayScale = origW / canvas.width;
+  // Y-up cameras invert the screen-y direction: sy = -wy*zoom + panY instead of +wy*zoom + panY.
+  // Flip the b, d, and ty contributions accordingly.
+  const ySign = cam.flipY ? -1 : 1;
   ctx.save();
   ctx.setTransform(
-    cam.zoom * t.a * displayScale,   // a
-    cam.zoom * t.b * displayScale,   // b
-    -cam.zoom * t.b * displayScale,  // c
-    cam.zoom * t.a * displayScale,   // d
-    cam.zoom * t.tx + cam.panX,      // e
-    cam.zoom * t.ty + cam.panY,      // f
+    cam.zoom * t.a * displayScale,            // a
+    ySign * cam.zoom * t.b * displayScale,    // b
+    -cam.zoom * t.b * displayScale,           // c
+    ySign * cam.zoom * t.a * displayScale,    // d
+    cam.zoom * t.tx + cam.panX,               // e
+    ySign * cam.zoom * t.ty + cam.panY,       // f
   );
   ctx.globalAlpha = 0.6;
   ctx.drawImage(canvas, 0, 0);
@@ -432,8 +435,7 @@ function hitTestLineForSplit(
         const res = nearestPointOnEdge([sx, sy], [asx, asy], [bsx, bsy]);
         if (res.distance < bestDist) {
           bestDist = res.distance;
-          const wx = (res.point[0] - cam.panX) / cam.zoom;
-          const wy = (res.point[1] - cam.panY) / cam.zoom;
+          const [wx, wy] = screenToWorld(res.point[0], res.point[1], cam);
           // Interpolate Z along world segment
           const segLen = Math.hypot(
             cmd.endPoint[0] - cmd.startPoint[0],
@@ -991,10 +993,15 @@ export default function Canvas() {
 
   // Derive Y-axis orientation from the active profile and keep it in a ref
   // so event-handler callbacks always see the current value.
+  // Declared here (before the flipY sync) so the calibration guard below can read it.
+  const [isCalibrating, setIsCalibrating] = useState(false);
+
   const flipY    = getProfile(softwareType, version).yAxisUp === true;
   const flipYRef = useRef(flipY);
   flipYRef.current             = flipY;
-  cameraRef.current.flipY      = flipY;   // sync immediately on each render
+  // Calibration uses image-pixel coords (always Y-down). Suppress flipY so the
+  // uncalibrated image draws correctly and calib click positions are in image space.
+  cameraRef.current.flipY      = isCalibrating ? false : flipY;
 
   // Refs so event-handler callbacks (which close over stale state) always see current values
   const lineThicknessesRef   = useRef(lineThicknesses);
@@ -1229,8 +1236,8 @@ export default function Canvas() {
   useEffect(() => { defaultZRef.current = defaultZ; }, [defaultZ]);
 
   // ── Calibration state ─────────────────────────────────────────────────────
+  // (isCalibrating / setIsCalibrating are declared above the flipY sync block.)
 
-  const [isCalibrating, setIsCalibrating]     = useState(false);
   const [calibPixels, setCalibPixels]         = useState<([number, number] | null)[]>([]);
   const [activeCalibIdx, setActiveCalibIdx]   = useState<number | null>(null);
   const [calibScales, setCalibScales]         = useState<number[]>([]);
@@ -2348,7 +2355,7 @@ export default function Canvas() {
               valve: activeParamRef.current, point: [wx, wy, defaultZRef.current],
               disabled: false, valveState: 'ValveOn',
             };
-            insertAboveSelection(newCmd, 'Add dot');
+            insertAfterSelection(newCmd, 'Add dot');
             // Continuous placement — keep tool active, don't call setActiveTool(null)
             return;
           }
@@ -2367,7 +2374,7 @@ export default function Canvas() {
                 disabled: false,
                 flowRate: { value: 0.5, unit: 'mg/mm' },
               };
-              insertAboveSelection(newCmd, 'Add line');
+              insertAfterSelection(newCmd, 'Add line');
               // Continuous: in chain mode carry endpoint forward; otherwise reset to start
               if (chainModeRef.current) {
                 placementLineStartRef.current = endPt;

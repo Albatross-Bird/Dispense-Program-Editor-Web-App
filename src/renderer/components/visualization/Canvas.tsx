@@ -2680,16 +2680,28 @@ export default function Canvas() {
       const file = e.dataTransfer.files[0];
       if (!file) return;
       const ext = file.name.split('.').pop()?.toLowerCase();
-      if (ext !== 'bmp' && ext !== 'png') return;
+      if (ext !== 'bmp' && ext !== 'png' && ext !== 'jpg' && ext !== 'jpeg') return;
       const reader = new FileReader();
       reader.onload = (ev) => {
         const dataUrl = ev.target?.result as string;
         const fp = (file as File & { path?: string }).path ?? file.name;
-        if (patternKey) setBackgroundImage(patternKey, { filePath: fp, dataUrl });
+        if (!patternKey) return;
+        // If this is a different image file, wipe the stale calibration so the
+        // user is always prompted to re-calibrate against the new image. Without
+        // this, the old transform (stored per-pattern, not per-image) would be
+        // silently applied to the new image and the ##BG_IMAGE comment would
+        // remain pointing at the old file and calibration points.
+        const currentPath = backgroundImage?.filePath ?? pendingBgData?.filePath;
+        if (fp !== currentPath) {
+          clearCalibrationData(patternKey);
+          if (selectedPatternName) setBgImageComment(selectedPatternName, null, []);
+          if (pendingBgData) setPendingBgImage(patternKey, null);
+        }
+        setBackgroundImage(patternKey, { filePath: fp, dataUrl });
       };
       reader.readAsDataURL(file);
     },
-    [setBackgroundImage, patternKey],
+    [setBackgroundImage, patternKey, backgroundImage, pendingBgData, clearCalibrationData, selectedPatternName, setBgImageComment, setPendingBgImage],
   );
 
   // ── Right-click ───────────────────────────────────────────────────────────

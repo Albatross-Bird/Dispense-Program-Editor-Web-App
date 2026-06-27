@@ -57,7 +57,12 @@ function FileMenu() {
   const saveAs  = useProgramStore((s) => s.saveAs);
   const filePath = useProgramStore((s) => s.filePath);
   const selectedPatternName = useProgramStore((s) => s.selectedPatternName);
-  const setBackgroundImage = useUIStore((s) => s.setBackgroundImage);
+  const setBackgroundImage  = useUIStore((s) => s.setBackgroundImage);
+  const backgroundImages    = useUIStore((s) => s.backgroundImages);
+  const pendingBgImages     = useUIStore((s) => s.pendingBgImages);
+  const setPendingBgImage   = useUIStore((s) => s.setPendingBgImage);
+  const clearCalibration    = useCalibrationStore((s) => s.clearCalibration);
+  const setBgImageComment   = useProgramStore((s) => s.setBgImageComment);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
@@ -76,11 +81,17 @@ function FileMenu() {
     if (!patternKey) return;
     const result = await window.electronAPI.loadImage();
     if (!result) return;
-    // Always create a fresh object so Canvas re-triggers calibration even for the same file.
-    // Use createObjectURL (no base64 overhead) for fast loading.
+    // If a different image file is being loaded, wipe the stale calibration so
+    // the user is always prompted to re-calibrate against the new image.
+    const currentPath = backgroundImages[patternKey]?.filePath ?? pendingBgImages[patternKey]?.filePath;
+    if (result.filePath !== currentPath) {
+      clearCalibration(patternKey);
+      if (selectedPatternName) setBgImageComment(selectedPatternName, null, []);
+      if (pendingBgImages[patternKey]) setPendingBgImage(patternKey, null);
+    }
     const dataUrl = URL.createObjectURL(new Blob([result.buffer], { type: result.mime }));
     setBackgroundImage(patternKey, { filePath: result.filePath, dataUrl });
-  }, [setBackgroundImage, patternKey]);
+  }, [setBackgroundImage, patternKey, backgroundImages, pendingBgImages, clearCalibration, selectedPatternName, setBgImageComment, setPendingBgImage]);
 
   const item = (label: string, action: () => void, disabled = false) => (
     <button
